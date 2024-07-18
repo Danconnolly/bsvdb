@@ -1,5 +1,5 @@
 use clap::Parser;
-use bsv_blockarchive::{BlockArchive, SimpleFileBasedBlockArchive};
+use bsvdb_blockarchive::{BlockArchive, SimpleFileBasedBlockArchive};
 use bitcoinsv::bitcoin::{BlockHash, FromHex, FullBlockStream};
 use tokio_stream::StreamExt;
 

@@ -1,0 +1,16 @@
+[package]
+name = "bsvdb-base"
+version = "0.1.0"
+edition = "2021"
+authors = [
+    "Daniel Connolly <daniel@dconnolly.com>"
+]
+license-file = "LICENSE"
+homepage = "https://github.com/Danconnolly/bsvdb/"
+repository = "https://github.com/Danconnolly/bsvdb/"
+description = "Base library for bsvdb"
+keywords = ["bitcoin-sv"]
+readme = "../README.md"
+
+[dependencies]
+config = "0.14.0"

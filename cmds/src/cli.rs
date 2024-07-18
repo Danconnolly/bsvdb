@@ -4,7 +4,7 @@ use std::io::Cursor;
 use bitcoinsv::bitcoin::{BlockHash, FullBlockStream, ToHex};
 use bitcoinsv_rpc::{Auth, Client, GetChainTipsResultStatus, RpcApi};
 use clap::{Parser, Subcommand};
-use bsv_blockarchive::{BlockArchive, SimpleFileBasedBlockArchive, Result, Error};
+use bsvdb_blockarchive::{BlockArchive, SimpleFileBasedBlockArchive, Result, Error};
 use tokio_stream::StreamExt;
 use url::Url;
 

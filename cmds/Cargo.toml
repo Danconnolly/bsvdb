@@ -15,7 +15,7 @@ log = "0.4.21"
 
 bitcoinsv = "0.2.5"
 bitcoinsv-rpc = "1.0.0"
-bsv-blockarchive = { path = "../blockarchive" }
+bsvdb-blockarchive = { path = "../blockarchive" }
 url = "2.5.0"
 
 [[bin]]
