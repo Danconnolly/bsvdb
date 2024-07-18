@@ -202,6 +202,7 @@ impl BlockArchive for SimpleFileBasedBlockArchive
 mod tests {
     use std::io::Cursor;
     use hex::FromHex;
+    use tempfile::tempdir;
     use tokio::io::AsyncReadExt;
     use super::*;
 
@@ -231,10 +232,9 @@ mod tests {
     // Test the block list function with no blocks.
     #[tokio::test]
     async fn test_empty_block_list() {
-        // calling a block function from tokio is bad, but this is a test
-        let root_dir = Temp::new_dir().unwrap();
-        let root = root_dir.to_path_buf();
-        let mut archive = SimpleFileBasedBlockArchive::new(root).await.unwrap();
+        // calling a blocking function from tokio is bad, but this is a test
+        let root = tempdir().unwrap();
+        let mut archive = SimpleFileBasedBlockArchive::new(root.into_path()).await.unwrap();
         let mut results = archive.block_list().await.unwrap();
         let mut count = 0;
         while let Some(_) = results.next().await {
@@ -314,9 +314,8 @@ mod tests {
     // Test storing a block by storing on in a temporary location and then checking it is stored correctly
     #[tokio::test]
     async fn test_store_block() {
-        let root = Temp::new_dir().unwrap();
-        let root_path = root.to_path_buf();
-        let archive = SimpleFileBasedBlockArchive::new(root_path.clone()).await.unwrap();
+        let root_path = tempdir().unwrap();
+        let archive = SimpleFileBasedBlockArchive::new(root_path.into_path()).await.unwrap();
         let h = BlockHash::from_hex("00000000000000a86c0a6d7b3445ff9e64908d6417cd6b256dbc23efd01de26f").unwrap();
         let block = "This is a block".as_bytes().to_vec();
         let block_cursor = Box::new(Cursor::new(block.clone()));
@@ -332,9 +331,8 @@ mod tests {
     // Test storing a block that already exists
     #[tokio::test]
     async fn test_store_existing_block() {
-        let root = Temp::new_dir().unwrap();
-        let root_path = root.to_path_buf();
-        let archive = SimpleFileBasedBlockArchive::new(root_path.clone()).await.unwrap();
+        let root_path = tempdir().unwrap();
+        let archive = SimpleFileBasedBlockArchive::new(root_path.into_path()).await.unwrap();
         let h = BlockHash::from_hex("00000000000000a86c0a6d7b3445ff9e64908d6417cd6b256dbc23efd01de26f").unwrap();
         let block = "This is a block".as_bytes().to_vec();
         let block_cursor = Box::new(Cursor::new(block.clone()));
