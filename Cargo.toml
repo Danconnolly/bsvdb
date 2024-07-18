@@ -1,0 +1,7 @@
+[workspace]
+members = [
+    "blockarchive",
+    "examples",
+    "cmds",
+]
+resolver = "2"
