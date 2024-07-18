@@ -8,7 +8,7 @@ use bsv_blockarchive::{BlockArchive, SimpleFileBasedBlockArchive, Result, Error}
 use tokio_stream::StreamExt;
 use url::Url;
 
-/// A simple CLI for managing block archives.
+/// A CLI for managing bsvdb components and systems.
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {
@@ -20,11 +20,20 @@ struct Args {
     verbose: bool,
     /// Command to perform
     #[command(subcommand)]
-    cmd: Commands,
+    cmd: SubSystems,
 }
 
 #[derive(Subcommand, Debug)]
-enum Commands {
+enum SubSystems {
+    /// Block Archive commands.
+    BA {
+        #[command(subcommand)]
+        ba_cmd: BACommands
+    }
+}
+
+#[derive(Subcommand, Debug)]
+enum BACommands {
     /// Perform checks on the archive.
     Check {
         #[command(subcommand)]
@@ -287,33 +296,37 @@ async fn rpc_import(root_dir: PathBuf, rpc_uri: String, verbose: bool) -> Result
 #[tokio::main]
 async fn main() {
     let args: Args = Args::parse();
+
     let root_dir = std::path::PathBuf::from(args.root_dir);
     match args.cmd {
-        Commands::Check{check_cmd} => {
-            match check_cmd {
-                CheckCommands::Linked => {
-                    check_links(root_dir).await.unwrap();
+        SubSystems::BA{ba_cmd} => { match ba_cmd {
+                BACommands::Check{check_cmd} => {
+                    match check_cmd {
+                        CheckCommands::Linked => {
+                            check_links(root_dir).await.unwrap();
+                        }
+                        CheckCommands::Block{block_hash} => {
+                            check_block(root_dir, block_hash).await.unwrap();
+                        }
+                        CheckCommands::Blocks => {
+                            check_all_blocks(root_dir, args.verbose).await.unwrap();
+                        }
+                    }
                 }
-                CheckCommands::Block{block_hash} => {
-                    check_block(root_dir, block_hash).await.unwrap();
+                BACommands::Header{hex, block_hash} => {
+                    header(root_dir, block_hash, hex).await.unwrap();
                 }
-                CheckCommands::Blocks => {
-                    check_all_blocks(root_dir, args.verbose).await.unwrap();
+                BACommands::Import {import_cmd} => {
+                    match import_cmd {
+                        ImportCommands::Rpc {rpc_uri} => {
+                            rpc_import(root_dir, rpc_uri, args.verbose).await.unwrap();
+                        }
+                    }
+                }
+                BACommands::List => {
+                    list_blocks(root_dir).await.unwrap();
                 }
             }
         }
-        Commands::Header{hex, block_hash} => {
-            header(root_dir, block_hash, hex).await.unwrap();
-        }
-        Commands::Import {import_cmd} => {
-            match import_cmd {
-                ImportCommands::Rpc {rpc_uri} => {
-                    rpc_import(root_dir, rpc_uri, args.verbose).await.unwrap();
-                }
-            }
-        }
-        Commands::List => {
-            list_blocks(root_dir).await.unwrap();
-        }
-    };
+    }
 }

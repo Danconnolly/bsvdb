@@ -19,7 +19,7 @@ bsv-blockarchive = { path = "../blockarchive" }
 url = "2.5.0"
 
 [[bin]]
-name = "blockarchive"
-path = "src/blockarchive.rs"
+name = "bsvdb-cli"
+path = "src/cli.rs"
 
 
