@@ -9,6 +9,7 @@ use tokio::fs::File;
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::ReadDirStream;
 use crate::block_archive::{BlockHashListStream, BlockHashListStreamFromChannel};
+use bsvdb_base::BlockArchiveConfig;
 
 // the absolute maximum number of blocks that will be stored
 // this is used to limit the size of the channel used to send block hashes
@@ -43,7 +44,8 @@ pub struct SimpleFileBasedBlockArchive {
 impl SimpleFileBasedBlockArchive
 {
     /// Create a new block archive with the given root path.
-    pub async fn new(root_path: PathBuf) -> Result<SimpleFileBasedBlockArchive> {
+    pub async fn new(config: &BlockArchiveConfig) -> Result<SimpleFileBasedBlockArchive> {
+        let root_path = PathBuf::from(config.root_path.clone());
         // Check if the root_path is accessible
         match tokio::fs::metadata(&root_path).await {
             Ok(_) => {

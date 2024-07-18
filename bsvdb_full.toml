@@ -1,0 +1,11 @@
+verbose = false                         # can be true or false - default is false
+blockchain = "mainnet"                  # can be "mainnet", "testnet", "stn", "regtest" - default is "mainnet"
+
+[block_archive]                         # configuration for the BlockArchive
+root_path = "/mnt/local/data/mainnet"   # REQUIRED: the root path for the Simple File Block Archive
+
+[chain_store]                           # configuration for the ChainStore
+root_dir = "bsvmain"                    # the root directory in foundationdb - the default value depends on the
+                                        # blockchain configuration and is one of "bsvmain", "bsvtest", "bsvstn", "bsvregtest"
+
+

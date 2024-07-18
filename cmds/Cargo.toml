@@ -12,11 +12,13 @@ futures = "0.3.30"
 env_logger = "0.10.1"
 clap = {  version = "4.5.2", features = ["derive", "env"]}
 log = "0.4.21"
-
+url = "2.5.0"
 bitcoinsv = "0.2.5"
 bitcoinsv-rpc = "1.0.0"
+
 bsvdb-blockarchive = { path = "../blockarchive" }
-url = "2.5.0"
+bsvdb-base = { path = "../base" }
+
 
 [[bin]]
 name = "bsvdb-cli"

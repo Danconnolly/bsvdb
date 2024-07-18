@@ -7,14 +7,15 @@ use clap::{Parser, Subcommand};
 use bsvdb_blockarchive::{BlockArchive, SimpleFileBasedBlockArchive, Result, Error};
 use tokio_stream::StreamExt;
 use url::Url;
+use bsvdb_base::{BlockArchiveConfig, BSVDBConfig};
 
 /// A CLI for managing bsvdb components and systems.
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {
-    /// The root of the block archive.
-    #[clap(short = 'r', long, env)]
-    root_dir: String,
+    /// Run with this configuration file, instead of default file.
+    #[clap(long)]
+    config: Option<String>,
     /// Emit more status messages.
     #[clap(short = 'v', long, default_value = "false")]
     verbose: bool,
@@ -88,8 +89,8 @@ enum ImportCommands {
     }
 }
 
-async fn list_blocks(root_dir: PathBuf) -> Result<()>{
-    let mut archive= SimpleFileBasedBlockArchive::new(root_dir).await.unwrap();
+async fn list_blocks(config: &BlockArchiveConfig) -> Result<()>{
+    let mut archive= SimpleFileBasedBlockArchive::new(config).await.unwrap();
     let mut results = archive.block_list().await.unwrap();
     while let Some(block_hash) = results.next().await {
         println!("{}", block_hash);
@@ -97,8 +98,8 @@ async fn list_blocks(root_dir: PathBuf) -> Result<()>{
     Ok(())
 }
 
-async fn check_links(root_dir: PathBuf) -> Result<()> {
-    let mut archive= SimpleFileBasedBlockArchive::new(root_dir).await.unwrap();
+async fn check_links(config: &BlockArchiveConfig) -> Result<()> {
+    let mut archive= SimpleFileBasedBlockArchive::new(config).await.unwrap();
     let mut block_it = archive.block_list().await.unwrap();
     // collect all hashes for checking parents
     let mut block_hashes = BTreeSet::new();
@@ -160,8 +161,8 @@ async fn check_single_block(mut block: FullBlockStream) -> Result<bool>{
 }
 
 // check the consistency of a single block
-async fn check_block(root_dir: PathBuf, block_hash: BlockHash) -> Result<()> {
-    let archive= SimpleFileBasedBlockArchive::new(root_dir).await.unwrap();
+async fn check_block(config: &BlockArchiveConfig, block_hash: BlockHash) -> Result<()> {
+    let archive= SimpleFileBasedBlockArchive::new(config).await.unwrap();
     let reader = archive.get_block(&block_hash).await.unwrap();
     let block = FullBlockStream::new(reader).await.unwrap();
     println!("Block hash: {}", block.block_header.hash());
@@ -176,8 +177,8 @@ async fn check_block(root_dir: PathBuf, block_hash: BlockHash) -> Result<()> {
 }
 
 // check all blocks
-async fn check_all_blocks(root_dir: PathBuf, verbose: bool) -> Result<()> {
-    let mut archive= SimpleFileBasedBlockArchive::new(root_dir).await.unwrap();
+async fn check_all_blocks(config: &BlockArchiveConfig, verbose: bool) -> Result<()> {
+    let mut archive= SimpleFileBasedBlockArchive::new(config).await.unwrap();
     let mut block_it = archive.block_list().await.unwrap();
     let mut num = 0;
     let mut errs = 0;
@@ -208,8 +209,8 @@ async fn check_all_blocks(root_dir: PathBuf, verbose: bool) -> Result<()> {
     Ok(())
 }
 
-async fn header(root_dir: PathBuf, block_hash: BlockHash, hex: bool) -> Result<()> {
-    let archive= SimpleFileBasedBlockArchive::new(root_dir).await.unwrap();
+async fn header(config: &BlockArchiveConfig, block_hash: BlockHash, hex: bool) -> Result<()> {
+    let archive= SimpleFileBasedBlockArchive::new(config).await.unwrap();
     match archive.block_header(&block_hash).await {
         Ok(h) => {
             if hex {
@@ -238,7 +239,7 @@ async fn header(root_dir: PathBuf, block_hash: BlockHash, hex: bool) -> Result<(
 // for every chain tip:
 //      follow chain down until find a block we already have, putting each block on a stack
 //      follow chain back up, popping off stack, fetch the block and store it in block archive
-async fn rpc_import(root_dir: PathBuf, rpc_uri: String, verbose: bool) -> Result<()> {
+async fn rpc_import(config: &BlockArchiveConfig, rpc_uri: String, verbose: bool) -> Result<()> {
     let uri;
     let username;
     let password;
@@ -253,7 +254,7 @@ async fn rpc_import(root_dir: PathBuf, rpc_uri: String, verbose: bool) -> Result
             password = String::from(url.password().unwrap());
         }
     }
-    let archive= SimpleFileBasedBlockArchive::new(root_dir).await.unwrap();
+    let archive= SimpleFileBasedBlockArchive::new(config).await.unwrap();
     let rpc_client = Client::new(&*uri, Auth::UserPass(username, password), None).unwrap();
     let chain_tips = rpc_client.get_chain_tips().unwrap();
     let num_tips = chain_tips.len();
@@ -296,35 +297,40 @@ async fn rpc_import(root_dir: PathBuf, rpc_uri: String, verbose: bool) -> Result
 #[tokio::main]
 async fn main() {
     let args: Args = Args::parse();
-
-    let root_dir = std::path::PathBuf::from(args.root_dir);
+    let config = BSVDBConfig::new(args.config).unwrap();
     match args.cmd {
-        SubSystems::BA{ba_cmd} => { match ba_cmd {
+        SubSystems::BA{ba_cmd} => {
+            if config.block_archive.is_none() {
+                println!("BlockArchive configuration not set.");
+                return;
+            }
+            let ba_config = config.block_archive.unwrap();
+            match ba_cmd {
                 BACommands::Check{check_cmd} => {
                     match check_cmd {
                         CheckCommands::Linked => {
-                            check_links(root_dir).await.unwrap();
+                            check_links(&ba_config).await.unwrap();
                         }
                         CheckCommands::Block{block_hash} => {
-                            check_block(root_dir, block_hash).await.unwrap();
+                            check_block(&ba_config, block_hash).await.unwrap();
                         }
                         CheckCommands::Blocks => {
-                            check_all_blocks(root_dir, args.verbose).await.unwrap();
+                            check_all_blocks(&ba_config, args.verbose).await.unwrap();
                         }
                     }
                 }
                 BACommands::Header{hex, block_hash} => {
-                    header(root_dir, block_hash, hex).await.unwrap();
+                    header(&ba_config, block_hash, hex).await.unwrap();
                 }
                 BACommands::Import {import_cmd} => {
                     match import_cmd {
                         ImportCommands::Rpc {rpc_uri} => {
-                            rpc_import(root_dir, rpc_uri, args.verbose).await.unwrap();
+                            rpc_import(&ba_config, rpc_uri, args.verbose).await.unwrap();
                         }
                     }
                 }
                 BACommands::List => {
-                    list_blocks(root_dir).await.unwrap();
+                    list_blocks(&ba_config).await.unwrap();
                 }
             }
         }
