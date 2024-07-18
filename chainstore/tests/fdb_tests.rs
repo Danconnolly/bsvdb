@@ -2,7 +2,7 @@ use bitcoinsv::bitcoin::{BlockchainId, BlockHash, BlockHeader};
 use foundationdb;
 use foundationdb::directory::Directory;
 use hex::FromHex;
-use bsv_chainstore::{BlockInfo, BlockValidity, ChainStore, FDBChainStore};
+use bsvdb_chainstore::{BlockInfo, BlockValidity, ChainStore, FDBChainStore};
 use rand::random;
 
 #[tokio::test]
