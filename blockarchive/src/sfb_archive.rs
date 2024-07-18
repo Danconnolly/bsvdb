@@ -202,7 +202,6 @@ impl BlockArchive for SimpleFileBasedBlockArchive
 mod tests {
     use std::io::Cursor;
     use hex::FromHex;
-    use mktemp::Temp;
     use tokio::io::AsyncReadExt;
     use super::*;
 

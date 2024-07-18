@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "blockarchive",
+    "chainstore",
     "examples",
     "cmds",
 ]
