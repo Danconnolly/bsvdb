@@ -74,6 +74,22 @@ impl BSVDBConfig {
             return self.chain_store.root_path.clone();
         }
     }
+
+    /// Check that the BlockArchive is enabled.
+    pub fn check_block_archive_enabled(&self) -> BsvDbBaseResult<()> {
+        match self.block_archive.enabled {
+            true => Ok(()),
+            false => Err(BsvDbBaseError::BlockArchiveNotEnabled),
+        }
+    }
+
+    /// Check that the BlockArchive is enabled.
+    pub fn check_chain_store_enabled(&self) -> BsvDbBaseResult<()> {
+        match self.chain_store.enabled {
+            true => Ok(()),
+            false => Err(BsvDbBaseError::ChainStoreNotEnabled),
+        }
+    }
 }
 
 const DEFAULT_CONFIG: &'static str = r#"

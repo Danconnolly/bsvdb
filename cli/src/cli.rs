@@ -1,9 +1,12 @@
+mod result;
 mod ba;
+mod global;
 
 use bitcoinsv::bitcoin::BlockHash;
 use clap::{Parser, Subcommand};
 use bsvdb_base::{BSVDBConfig};
 use crate::ba::{check_all_blocks, check_block, check_links, header, list_blocks, rpc_import};
+use crate::global::sync;
 
 /// A CLI for managing bsvdb components and systems.
 #[derive(Parser, Debug)]
@@ -27,9 +30,9 @@ enum CommandOrSystem {
         #[command(subcommand)]
         ba_cmd: BACommands
     },
-    // /// Synchronize system.
-    // #[clap(long_about = "synchronizes data between various components, such as importing blocks from blockstore to chainstore.")]
-    // Sync,
+    /// Synchronize system.
+    #[clap(long_about = "synchronizes data between various components, such as importing blocks from blockstore to chainstore.")]
+    Sync,
 }
 
 #[derive(Subcommand, Debug)]
@@ -88,9 +91,6 @@ enum BAImportCommands {
     }
 }
 
-
-
-
 #[tokio::main]
 async fn main() {
     let args: Args = Args::parse();
@@ -130,6 +130,9 @@ async fn main() {
                     list_blocks(&ba_config).await.unwrap();
                 }
             }
+        },
+        CommandOrSystem::Sync => {
+            sync(&config).await.unwrap();
         }
     }
 }

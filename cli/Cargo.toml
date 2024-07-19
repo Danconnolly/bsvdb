@@ -13,12 +13,13 @@ env_logger = "0.10.1"
 clap = {  version = "4.5.2", features = ["derive", "env"]}
 log = "0.4.21"
 url = "2.5.0"
+foundationdb = { version = "0.9.0", features = ["fdb-7_1"] }
 bitcoinsv = "0.2.5"
 bitcoinsv-rpc = "1.0.0"
 
-bsvdb-blockarchive = { path = "../blockarchive" }
 bsvdb-base = { path = "../base" }
-
+bsvdb-blockarchive = { path = "../blockarchive" }
+bsvdb-chainstore = { path = "../chainstore" }
 
 [[bin]]
 name = "bsvdb-cli"

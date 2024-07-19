@@ -8,13 +8,19 @@ pub type BsvDbBaseResult<T> = std::result::Result<T, BsvDbBaseError>;
 pub enum BsvDbBaseError {
     /// The blockchain specified is not recognized.
     BlockchainUnknown,
+    /// The BlockArchive component is not enabled.
+    BlockArchiveNotEnabled,
+    /// The ChainStore component is not enabled.
+    ChainStoreNotEnabled,
     ConfigError(ConfigError),
 }
 
 impl std::fmt::Display for BsvDbBaseError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            BsvDbBaseError::BlockchainUnknown => write!(f, "Blockchain not recognized"),
+            BsvDbBaseError::BlockchainUnknown => write!(f, "Blockchain not recognized."),
+            BsvDbBaseError::BlockArchiveNotEnabled => write!(f, "BlockArchive not enabled."),
+            BsvDbBaseError::ChainStoreNotEnabled => write!(f, "ChainStore not enabled"),
             BsvDbBaseError::ConfigError(err) => write!(f, "Config error: {}", err),
         }
     }

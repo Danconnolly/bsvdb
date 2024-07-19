@@ -1,9 +1,12 @@
 use std::borrow::Cow;
 use std::collections::BTreeMap;
+use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 use async_trait::async_trait;
 use bitcoinsv::bitcoin::{BlockchainId, BlockHash, BlockHeader, Encodable};
 use foundationdb::directory::{Directory, DirectoryOutput};
 use foundationdb::tuple::{Bytes, Element, pack, unpack};
+use bsvdb_base::ChainStoreConfig;
 use crate::chain_store::ChainState;
 use crate::{BlockId, BlockInfo, BlockValidity, ChainStore, Error, Result};
 
@@ -22,8 +25,10 @@ pub struct FDBChainStore {
     infos_dir: DirectoryOutput,
     // hash index directory
     h_index_dir: DirectoryOutput,
-    // hash index cache
-    h_index_cache: BTreeMap<BlockHash, BlockId>,
+    // hash index cache, with RwLock
+    h_index_cache: RwLock<BTreeMap<BlockHash, BlockId>>,
+    // next_id increment lock
+    next_id_lock: Mutex<u8>,
 }
 
 impl FDBChainStore {
@@ -41,7 +46,8 @@ impl FDBChainStore {
     /// The root directory supplied as a parameter must be dedicated to the ChainStore. If the
     /// ChainStore is part of a larger system, then this is probably a sub-directory of the larger
     /// systems directory. (e.g.: vec!["bsvmain", "chainstore"])
-    pub async fn new(root_dir: Vec<String>, chain: BlockchainId) -> Result<Self> {
+    pub async fn new(config: &ChainStoreConfig, chain: BlockchainId) -> Result<Self> {
+        let root_dir: Vec<String> = config.root_path.split('/').map(|i| String::from(i)).collect();
         let db = foundationdb::Database::default()?;
         let r_dir = foundationdb::directory::DirectoryLayer::default();
         // ensure chain dir exists and fetch it
@@ -60,7 +66,8 @@ impl FDBChainStore {
         trx.commit().await?;
         Self::ensure_db_initialized(&db, &chain_dir, &infos_dir, &h_index_dir, chain).await?;
         Ok(FDBChainStore {
-            db, chain_dir, infos_dir, h_index_dir, h_index_cache: BTreeMap::new(),
+            db, chain_dir, infos_dir, h_index_dir, h_index_cache: RwLock::new(BTreeMap::new()),
+            next_id_lock: Mutex::new(5),
         })
     }
 
@@ -205,8 +212,8 @@ impl FDBChainStore {
 
     // get the BlockId from the hash
     pub(crate) async fn get_block_id_from_hash(&mut self, block_hash: &BlockHash) -> Result<Option<BlockId>> {
-        match self.h_index_cache.get(block_hash) {
-            Some(id) => return Ok(Some(*id)),
+        match self.h_index_cache.read().await.get(block_hash) {
+            Some(id) => Ok(Some(*id)),
             None => {
                 let k = Self::get_h_index_key(&self.h_index_dir, block_hash)?;
                 let trx = self.db.create_trx()?;
@@ -216,13 +223,15 @@ impl FDBChainStore {
                     return Ok(None);
                 }
                 let i = Self::decode_h_index(&v.unwrap().to_vec());
-                self.h_index_cache.insert(block_hash.clone(), i);
+                self.h_index_cache.write().await.insert(block_hash.clone(), i);
                 Ok(Some(i))
             },
         }
     }
 
     async fn get_next_id(&self) -> Result<BlockId> {
+        // only do one of these at a time to prevent db transaction clashes
+        let _lck = self.next_id_lock.lock().await;
         let trx = self.db.create_trx().unwrap();
         let k = Self::get_next_id_key(&self.chain_dir).unwrap();
         let v= trx.get(&*k, false).await.unwrap().unwrap();
