@@ -3,6 +3,6 @@ members = [
     "base",
     "blockarchive",
     "chainstore",
-    "cmds",
+    "cli",
 ]
 resolver = "2"

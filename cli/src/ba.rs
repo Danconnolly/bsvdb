@@ -1,95 +1,13 @@
-use std::path::PathBuf;
 use std::collections::{BTreeSet, VecDeque};
 use std::io::Cursor;
 use bitcoinsv::bitcoin::{BlockHash, FullBlockStream, ToHex};
 use bitcoinsv_rpc::{Auth, Client, GetChainTipsResultStatus, RpcApi};
-use clap::{Parser, Subcommand};
-use bsvdb_blockarchive::{BlockArchive, SimpleFileBasedBlockArchive, Result, Error};
 use tokio_stream::StreamExt;
 use url::Url;
-use bsvdb_base::{BlockArchiveConfig, BSVDBConfig};
+use bsvdb_base::BlockArchiveConfig;
+use bsvdb_blockarchive::{BlockArchive, Error, SimpleFileBasedBlockArchive};
 
-/// A CLI for managing bsvdb components and systems.
-#[derive(Parser, Debug)]
-#[command(version, about, long_about = None)]
-struct Args {
-    /// Run with this configuration file, instead of default file.
-    #[clap(long)]
-    config: Option<String>,
-    /// Emit more status messages.
-    #[clap(short = 'v', long, default_value = "false")]
-    verbose: bool,
-    /// Command to perform
-    #[command(subcommand)]
-    cmd: SubSystems,
-}
-
-#[derive(Subcommand, Debug)]
-enum SubSystems {
-    /// Block Archive commands.
-    BA {
-        #[command(subcommand)]
-        ba_cmd: BACommands
-    }
-}
-
-#[derive(Subcommand, Debug)]
-enum BACommands {
-    /// Perform checks on the archive.
-    Check {
-        #[command(subcommand)]
-        check_cmd: CheckCommands,
-    },
-    /// Get the header of a block
-    Header {
-        /// Return hex encoded.
-        #[clap(short = 'x', long, default_value = "false")]
-        hex: bool,
-        /// Block hash.
-        block_hash: BlockHash,
-    },
-    /// Import blocks.
-    Import {
-        #[command(subcommand)]
-        import_cmd: ImportCommands,
-    },
-    /// List all blocks in the archive.
-    List,
-}
-
-#[derive(Subcommand, Debug)]
-enum CheckCommands {
-    /// Check that all blocks are linked in the archive (except the Genesis block).  WARNING: this may take a long time.
-    Linked,
-    /// Consistency check of a single block.
-    ///
-    /// The consistency check is not block validation. It checks that the block is consistent which
-    /// involves reading every transaction, hashing the transaction, and checking that the merkle
-    /// root of the transaction hashes matches the value in the header.
-    Block {
-        /// Block hash.
-        block_hash: BlockHash,
-    },
-    /// Consistency check of all blocks. WARNING: this may take a long time.
-    ///
-    /// The consistency check is not block validation. It checks that the block is consistent which
-    /// involves reading every transaction, hashing the transaction, and checking that the merkle
-    /// root of the transaction hashes matches the value in the header.
-    Blocks,
-}
-
-#[derive(Subcommand, Debug)]
-enum ImportCommands {
-    /// Import blocks over an RPC connection from an SV Node.
-    Rpc {
-        /// RCP Connection URI.
-        ///
-        /// URI should be something like 'http://username:password@127.0.0.1:8332'
-        rpc_uri: String,
-    }
-}
-
-async fn list_blocks(config: &BlockArchiveConfig) -> Result<()>{
+pub async fn list_blocks(config: &BlockArchiveConfig) -> bsvdb_blockarchive::Result<()> {
     let mut archive= SimpleFileBasedBlockArchive::new(config).await.unwrap();
     let mut results = archive.block_list().await.unwrap();
     while let Some(block_hash) = results.next().await {
@@ -98,7 +16,7 @@ async fn list_blocks(config: &BlockArchiveConfig) -> Result<()>{
     Ok(())
 }
 
-async fn check_links(config: &BlockArchiveConfig) -> Result<()> {
+pub async fn check_links(config: &BlockArchiveConfig) -> bsvdb_blockarchive::Result<()> {
     let mut archive= SimpleFileBasedBlockArchive::new(config).await.unwrap();
     let mut block_it = archive.block_list().await.unwrap();
     // collect all hashes for checking parents
@@ -123,7 +41,7 @@ async fn check_links(config: &BlockArchiveConfig) -> Result<()> {
 }
 
 // check a single block, returns true if all ok, false otherwise
-async fn check_single_block(mut block: FullBlockStream) -> Result<bool>{
+pub async fn check_single_block(mut block: FullBlockStream) -> bsvdb_blockarchive::Result<bool> {
     // collect transaction hashes
     let mut hashes = VecDeque::new();
     while let Some(tx) = block.next().await {
@@ -161,7 +79,7 @@ async fn check_single_block(mut block: FullBlockStream) -> Result<bool>{
 }
 
 // check the consistency of a single block
-async fn check_block(config: &BlockArchiveConfig, block_hash: BlockHash) -> Result<()> {
+pub async fn check_block(config: &BlockArchiveConfig, block_hash: BlockHash) -> bsvdb_blockarchive::Result<()> {
     let archive= SimpleFileBasedBlockArchive::new(config).await.unwrap();
     let reader = archive.get_block(&block_hash).await.unwrap();
     let block = FullBlockStream::new(reader).await.unwrap();
@@ -177,7 +95,7 @@ async fn check_block(config: &BlockArchiveConfig, block_hash: BlockHash) -> Resu
 }
 
 // check all blocks
-async fn check_all_blocks(config: &BlockArchiveConfig, verbose: bool) -> Result<()> {
+pub async fn check_all_blocks(config: &BlockArchiveConfig, verbose: bool) -> bsvdb_blockarchive::Result<()> {
     let mut archive= SimpleFileBasedBlockArchive::new(config).await.unwrap();
     let mut block_it = archive.block_list().await.unwrap();
     let mut num = 0;
@@ -209,7 +127,7 @@ async fn check_all_blocks(config: &BlockArchiveConfig, verbose: bool) -> Result<
     Ok(())
 }
 
-async fn header(config: &BlockArchiveConfig, block_hash: BlockHash, hex: bool) -> Result<()> {
+pub async fn header(config: &BlockArchiveConfig, block_hash: BlockHash, hex: bool) -> bsvdb_blockarchive::Result<()> {
     let archive= SimpleFileBasedBlockArchive::new(config).await.unwrap();
     match archive.block_header(&block_hash).await {
         Ok(h) => {
@@ -239,7 +157,7 @@ async fn header(config: &BlockArchiveConfig, block_hash: BlockHash, hex: bool) -
 // for every chain tip:
 //      follow chain down until find a block we already have, putting each block on a stack
 //      follow chain back up, popping off stack, fetch the block and store it in block archive
-async fn rpc_import(config: &BlockArchiveConfig, rpc_uri: String, verbose: bool) -> Result<()> {
+pub async fn rpc_import(config: &BlockArchiveConfig, rpc_uri: String, verbose: bool) -> bsvdb_blockarchive::Result<()> {
     let uri;
     let username;
     let password;
@@ -290,49 +208,4 @@ async fn rpc_import(config: &BlockArchiveConfig, rpc_uri: String, verbose: bool)
     }
     println!("checked {} chain tips, imported {} blocks ", num_tips, fetched);
     Ok(())
-}
-
-
-
-#[tokio::main]
-async fn main() {
-    let args: Args = Args::parse();
-    let config = BSVDBConfig::new(args.config).unwrap();
-    match args.cmd {
-        SubSystems::BA{ba_cmd} => {
-            if config.block_archive.is_none() {
-                println!("BlockArchive configuration not set.");
-                return;
-            }
-            let ba_config = config.block_archive.unwrap();
-            match ba_cmd {
-                BACommands::Check{check_cmd} => {
-                    match check_cmd {
-                        CheckCommands::Linked => {
-                            check_links(&ba_config).await.unwrap();
-                        }
-                        CheckCommands::Block{block_hash} => {
-                            check_block(&ba_config, block_hash).await.unwrap();
-                        }
-                        CheckCommands::Blocks => {
-                            check_all_blocks(&ba_config, args.verbose).await.unwrap();
-                        }
-                    }
-                }
-                BACommands::Header{hex, block_hash} => {
-                    header(&ba_config, block_hash, hex).await.unwrap();
-                }
-                BACommands::Import {import_cmd} => {
-                    match import_cmd {
-                        ImportCommands::Rpc {rpc_uri} => {
-                            rpc_import(&ba_config, rpc_uri, args.verbose).await.unwrap();
-                        }
-                    }
-                }
-                BACommands::List => {
-                    list_blocks(&ba_config).await.unwrap();
-                }
-            }
-        }
-    }
 }
