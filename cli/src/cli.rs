@@ -1,10 +1,7 @@
 mod ba;
 
-use bitcoinsv::bitcoin::{BlockHash, ToHex};
-use bitcoinsv_rpc::{RpcApi};
+use bitcoinsv::bitcoin::BlockHash;
 use clap::{Parser, Subcommand};
-use bsvdb_blockarchive::{BlockArchive};
-use tokio_stream::StreamExt;
 use bsvdb_base::{BSVDBConfig};
 use crate::ba::{check_all_blocks, check_block, check_links, header, list_blocks, rpc_import};
 
@@ -18,18 +15,21 @@ struct Args {
     /// Emit more status messages.
     #[clap(short = 'v', long, default_value = "false")]
     verbose: bool,
-    /// Command to perform
+    /// Command or sub-system.
     #[command(subcommand)]
-    cmd: SubSystems,
+    cmd: CommandOrSystem,
 }
 
 #[derive(Subcommand, Debug)]
-enum SubSystems {
+enum CommandOrSystem {
     /// Block Archive commands.
     BA {
         #[command(subcommand)]
         ba_cmd: BACommands
-    }
+    },
+    // /// Synchronize system.
+    // #[clap(long_about = "synchronizes data between various components, such as importing blocks from blockstore to chainstore.")]
+    // Sync,
 }
 
 #[derive(Subcommand, Debug)]
@@ -37,7 +37,7 @@ enum BACommands {
     /// Perform checks on the archive.
     Check {
         #[command(subcommand)]
-        check_cmd: CheckCommands,
+        check_cmd: BACheckCommands,
     },
     /// Get the header of a block
     Header {
@@ -50,14 +50,14 @@ enum BACommands {
     /// Import blocks.
     Import {
         #[command(subcommand)]
-        import_cmd: ImportCommands,
+        import_cmd: BAImportCommands,
     },
     /// List all blocks in the archive.
     List,
 }
 
 #[derive(Subcommand, Debug)]
-enum CheckCommands {
+enum BACheckCommands {
     /// Check that all blocks are linked in the archive (except the Genesis block).  WARNING: this may take a long time.
     Linked,
     /// Consistency check of a single block.
@@ -78,7 +78,7 @@ enum CheckCommands {
 }
 
 #[derive(Subcommand, Debug)]
-enum ImportCommands {
+enum BAImportCommands {
     /// Import blocks over an RPC connection from an SV Node.
     Rpc {
         /// RCP Connection URI.
@@ -96,22 +96,22 @@ async fn main() {
     let args: Args = Args::parse();
     let config = BSVDBConfig::new(args.config).unwrap();
     match args.cmd {
-        SubSystems::BA{ba_cmd} => {
-            if config.block_archive.is_none() {
+        CommandOrSystem::BA{ba_cmd} => {
+            if ! config.block_archive.enabled {
                 println!("BlockArchive configuration not set.");
                 return;
             }
-            let ba_config = config.block_archive.unwrap();
+            let ba_config = config.block_archive;
             match ba_cmd {
                 BACommands::Check{check_cmd} => {
                     match check_cmd {
-                        CheckCommands::Linked => {
+                        BACheckCommands::Linked => {
                             check_links(&ba_config).await.unwrap();
                         }
-                        CheckCommands::Block{block_hash} => {
+                        BACheckCommands::Block{block_hash} => {
                             check_block(&ba_config, block_hash).await.unwrap();
                         }
-                        CheckCommands::Blocks => {
+                        BACheckCommands::Blocks => {
                             check_all_blocks(&ba_config, args.verbose).await.unwrap();
                         }
                     }
@@ -121,7 +121,7 @@ async fn main() {
                 }
                 BACommands::Import {import_cmd} => {
                     match import_cmd {
-                        ImportCommands::Rpc {rpc_uri} => {
+                        BAImportCommands::Rpc {rpc_uri} => {
                             rpc_import(&ba_config, rpc_uri, args.verbose).await.unwrap();
                         }
                     }
