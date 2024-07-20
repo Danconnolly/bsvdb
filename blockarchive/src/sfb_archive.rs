@@ -210,6 +210,7 @@ mod tests {
 
     fn get_testdata_config() -> BlockArchiveConfig {
         BlockArchiveConfig {
+            enabled: true,
             root_path: String::from("../testdata/blockarchive"),
         }
     }
@@ -244,6 +245,7 @@ mod tests {
         // calling a blocking function from tokio is bad, but this is a test
         let root = tempdir().unwrap();
         let c = BlockArchiveConfig {
+            enabled: true,
             root_path: String::from(root.path().to_str().unwrap()),
         };
         let mut archive = SimpleFileBasedBlockArchive::new(&c).await.unwrap();
@@ -259,6 +261,7 @@ mod tests {
     #[tokio::test]
     async fn test_non_existent_root_dir() {
         let c = BlockArchiveConfig {
+            enabled: true,
             root_path: String::from("../testdata/nonexistent"),
         };
         let archive = SimpleFileBasedBlockArchive::new(&c).await;
@@ -330,6 +333,7 @@ mod tests {
     async fn test_store_block() {
         let root_path = tempdir().unwrap();
         let c = BlockArchiveConfig {
+            enabled: true,
             root_path: String::from(root_path.path().to_str().unwrap()),
         };
         let archive = SimpleFileBasedBlockArchive::new(&c).await.unwrap();
@@ -350,6 +354,7 @@ mod tests {
     async fn test_store_existing_block() {
         let root_path = tempdir().unwrap();
         let c = BlockArchiveConfig {
+            enabled: true,
             root_path: String::from(root_path.path().to_str().unwrap()),
         };
         let archive = SimpleFileBasedBlockArchive::new(&c).await.unwrap();

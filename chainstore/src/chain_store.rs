@@ -1,6 +1,10 @@
+use std::future::Future;
+use std::pin::Pin;
 use async_trait::async_trait;
 use bitcoinsv::bitcoin::{BlockchainId, BlockHash, BlockHeader};
-use crate::result::Result;
+use tokio::io::Join;
+use tokio::task::JoinHandle;
+use crate::ChainStoreResult;
 
 /// A ChainStore stores information about a blockchain.
 ///
@@ -11,24 +15,35 @@ use crate::result::Result;
 ///
 /// Each ChainStore is associated with a particular blockchain (e.g. mainnet, testnet, etc).
 ///
-/// The initialization of the ChainStore is not defined here, but it must be initialized with the
-/// genesis block.
+/// The initialization of the ChainStore is not defined here, each implementation may have
+/// different initialization needs. However, each new ChainStore must be initialized with the genesis block
+/// for the blockchain that it is intended for.
+///
+/// Each implementation of ChainStore is expected to support async parallelization, as described
+/// in the development notes (Developing Parallel Access to Databases)[/docs/dev-parallel-dbs.md].
 #[async_trait]
 pub trait ChainStore {
     /// Returns the current state of the blockchain.
-    async fn get_chain_state(&mut self) -> Result<ChainState>;
+    async fn get_chain_state(&mut self) -> ChainStoreResult<ChainState>;
 
-    /// Returns the block info for the block with the given id.
-    async fn get_block_info(&mut self, db_id: &BlockId) -> Result<Option<BlockInfo>>;
+    /// Get the block info for the block with the given id.
+    ///
+    /// Returns a future that will produce the results. In async code you can use it like this
+    /// `let i = db.get_block_info(23).await;`
+    /// Or you can spawn a new task to produce the result in the background like this:
+    /// `let j = tokio::spawn(db.get_block_info(23));
+    /// let i = j.await;
+    /// `
+    fn get_block_info(&self, db_id: BlockId) -> impl Future<Output = ChainStoreResult<Option<BlockInfo>>>;
 
     /// Returns the block info for the block with the given hash.
-    async fn get_block_info_by_hash(&mut self, hash: &BlockHash) -> Result<Option<BlockInfo>>;
+    async fn get_block_info_by_hash(&self, hash: BlockHash) -> JoinHandle<ChainStoreResult<Option<BlockInfo>>>;
 
     /// Returns the block infos for the block and its ancestors.
     ///
     /// Return at most max_blocks block infos, if given, otherwise return all block infos to the
     /// genesis block.
-    async fn get_block_infos(&mut self, db_id: &BlockId, max_blocks: Option<u64>) -> Result<Vec<BlockInfo>>;
+    async fn get_block_infos(&mut self, db_id: &BlockId, max_blocks: Option<u64>) -> ChainStoreResult<Vec<BlockInfo>>;
 
     /// Store the block info in the ChainStore, returning an updated BlockInfo structure.
     ///
@@ -55,7 +70,7 @@ pub trait ChainStore {
     ///
     /// If the validity of the parent block is HeaderInvalid, then the validity of the child block is
     /// InvalidAncestor.
-    async fn store_block_info(&mut self, block_info: BlockInfo) -> Result<BlockInfo>;
+    async fn store_block_info(&mut self, block_info: BlockInfo) -> ChainStoreResult<BlockInfo>;
 }
 
 /// The BlockId is a unique identifier for a block in the ChainStore.

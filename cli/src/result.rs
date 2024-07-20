@@ -1,7 +1,7 @@
 use tokio::task::JoinError;
 use bsvdb_base::BsvDbBaseError;
 use bsvdb_blockarchive::Error as BlockArchiveError;
-use bsvdb_chainstore::Error as ChainStoreError;
+use bsvdb_chainstore::ChainStoreError;
 
 
 /// Standard Result used in the library
