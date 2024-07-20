@@ -6,7 +6,7 @@ use bitcoinsv::bitcoin::BlockHash;
 use clap::{Parser, Subcommand};
 use bsvdb_base::{BSVDBConfig};
 use crate::ba::{check_all_blocks, check_block, check_links, header, list_blocks, rpc_import};
-use crate::global::{sync, sync_piped};
+use crate::global::{sync_piped};
 
 /// A CLI for managing bsvdb components and systems.
 #[derive(Parser, Debug)]
