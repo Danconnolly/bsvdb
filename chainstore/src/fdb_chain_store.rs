@@ -57,9 +57,9 @@ impl ChainStore for FDBChainStore {
         todo!()
     }
 
-    fn get_block_info(&self, db_id: BlockId) -> BoxFuture<'_,ChainStoreResult<Option<BlockInfo>>> {
+    fn get_block_info(&self, db_id: BlockId) -> Pin<Box<dyn Future<Output=ChainStoreResult<Option<BlockInfo>>> + Send>> {
         let sender = self.sender.clone();
-        async move {
+        Box::pin(async move {
             let (tx, rx) = oneshot_channel();
             sender.send((FDBChainStoreMessage::BlockInfo(db_id), tx)).await.map_err(|e| {
                 eprintln!("Failed to send message: {}", e);
@@ -72,26 +72,8 @@ impl ChainStore for FDBChainStore {
                     Err("Failed to receive reply".into())
                 }
             }
-        }.boxed()
+        })
     }
-
-    // fn get_block_info(&self, db_id: BlockId) -> Pin<Box<dyn Future<Output=ChainStoreResult<Option<BlockInfo>>>>> {
-    //     let sender = self.sender.clone();
-    //     Box::pin(async move {
-    //         let (tx, rx) = oneshot_channel();
-    //         sender.send((FDBChainStoreMessage::BlockInfo(db_id), tx)).await.map_err(|e| {
-    //             eprintln!("Failed to send message: {}", e);
-    //             "Failed to send message"
-    //         })?;
-    //         match rx.await {
-    //             Ok(FDBChainStoreReply::BlockInfoReply(r)) => Ok(r),
-    //             Err(e) => {
-    //                 eprintln!("Failed to receive reply: {}", e);
-    //                 Err("Failed to receive reply".into())
-    //             }
-    //         }
-    //     })
-    // }
 
     async fn get_block_info_by_hash(&self, hash: BlockHash) -> JoinHandle<ChainStoreResult<Option<BlockInfo>>> {
         let s = self.sender.clone();

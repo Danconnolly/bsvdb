@@ -15,6 +15,9 @@ use crate::ChainStoreResult;
 ///
 /// Each ChainStore is associated with a particular blockchain (e.g. mainnet, testnet, etc).
 ///
+/// All functions return a future that can be safely sent between threads, enabling parallel execution
+/// of the futures returned by the functions.
+///
 /// The initialization of the ChainStore is not defined here, each implementation may have
 /// different initialization needs. However, each new ChainStore must be initialized with the genesis block
 /// for the blockchain that it is intended for.
@@ -28,13 +31,8 @@ pub trait ChainStore {
 
     /// Get the block info for the block with the given id.
     ///
-    /// Returns a future that will produce the results. In async code you can use it like this
-    /// `let i = db.get_block_info(23).await;`
-    /// Or you can spawn a new task to produce the result in the background like this:
-    /// `let j = tokio::spawn(db.get_block_info(23));
-    /// let i = j.await;
-    /// `
-    fn get_block_info(&self, db_id: BlockId) -> impl Future<Output = ChainStoreResult<Option<BlockInfo>>>;
+    /// Returns a future that will produce the results.
+    fn get_block_info(&self, db_id: BlockId) -> impl Future<Output = ChainStoreResult<Option<BlockInfo>>> + Send;
 
     /// Returns the block info for the block with the given hash.
     async fn get_block_info_by_hash(&self, hash: BlockHash) -> JoinHandle<ChainStoreResult<Option<BlockInfo>>>;
