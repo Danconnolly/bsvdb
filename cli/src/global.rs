@@ -224,23 +224,23 @@ pub async fn sync_piped(config: &BSVDBConfig) -> CliResult<()> {
     let mut block_archive = SimpleFileBasedBlockArchive::new(&config.block_archive).await?;
     let (mut chain_store, _j_chain_store) = FDBChainStore::new(&config.chain_store, config.get_blockchain_id()).await?;
 
-    let i = block_archive.block_list().await?;
-    let (sender, mut receiver) = channel(BUFFER_SIZE);
-    let f_stage1 = stage1(i, chain_store.clone(), sender);
-    let j_stage1 = tokio::spawn(f_stage1);
-
-    let start_time = Instant::now();
-    let mut i = 0;
-    while let Some((j, h)) = receiver.recv().await {
-        let k = j.await;
-        i += 1;
-        if i % 10_000 == 0 {
-            let dur = start_time.elapsed();
-            println!("found {} blocks, {} blocks/sec", i, (i as f32)/dur.as_secs_f32());
-        }
-    }
-    let dur = start_time.elapsed();
-    println!("found {} blocks, {} blocks/sec", i, (i as f32)/dur.as_secs_f32());
+    // let i = block_archive.block_list().await?;
+    // let (sender, mut receiver) = channel(BUFFER_SIZE);
+    // let f_stage1 = stage1(i, chain_store.clone(), sender);
+    // let j_stage1 = tokio::spawn(f_stage1);
+    //
+    // let start_time = Instant::now();
+    // let mut i = 0;
+    // while let Some((j, h)) = receiver.recv().await {
+    //     let k = j.await;
+    //     i += 1;
+    //     if i % 10_000 == 0 {
+    //         let dur = start_time.elapsed();
+    //         println!("found {} blocks, {} blocks/sec", i, (i as f32)/dur.as_secs_f32());
+    //     }
+    // }
+    // let dur = start_time.elapsed();
+    // println!("found {} blocks, {} blocks/sec", i, (i as f32)/dur.as_secs_f32());
 
     // let (s2, r2) = channel(BUFFER_SIZE);
     // let f_stage2 = stage2(receiver, config.clone(), s2);

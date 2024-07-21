@@ -7,6 +7,40 @@ use bsvdb_chainstore::{BlockInfo, BlockValidity, ChainStore, FDBChainStore};
 use rand::random;
 use bsvdb_base::ChainStoreConfig;
 
+
+/// Check that we can spawn multiple instances of queries running simultaneously
+#[tokio::test]
+async fn check_multi_spawn() {
+    let network = unsafe { foundationdb::boot() };
+    // get a unique root
+    let r_id: u16 = random();
+    let root = format!("testing{}", r_id);
+    let config = ChainStoreConfig {
+        enabled: true,
+        root_path: root,
+    };
+    let (mut chain_store, mut j) = FDBChainStore::new(&config, BlockchainId::Mainnet).await.unwrap();
+
+    // can we do lots of reads at once?
+    let mut v = vec![];
+    for i in 0..9 {
+        let i = chain_store.get_block_info(i);
+        let j = tokio::spawn(i);
+        v.push(j);
+    }
+    while ! v.is_empty() {
+        let j = v.pop().unwrap();
+        let r = j.await;
+        assert!(r.is_ok());
+        let i = r.unwrap();
+        assert!(i.is_ok());
+    }
+
+    // todo: shut down the chain_store
+
+    drop(network);
+}
+
 #[tokio::test]
 async fn check_store() {
     let network = unsafe { foundationdb::boot() };
@@ -26,23 +60,6 @@ async fn check_store() {
     assert_eq!(g_block.hash, BlockHeader::get_genesis(BlockchainId::Mainnet).hash());
     assert_eq!(g_block.height, 0);
     assert_eq!(g_block.size, Some(285));
-
-    // can we do lots of reads at once?
-    let mut v = vec![];
-    for _ in 1..10 {
-        let i = chain_store.get_block_info(0);
-        let j = tokio::spawn(i);
-        v.push(j);
-    }
-    while ! v.is_empty() {
-        let j = v.pop().unwrap();
-        let r = j.await;
-        assert!(r.is_ok());
-        let i = r.unwrap();
-        assert!(i.is_ok());
-        let k = i.unwrap();
-        assert!(k.is_some());
-    }
 
     // // get genesis block by hash
     // let g_block2 = chain_store.get_block_info_by_hash(&BlockHeader::get_genesis(BlockchainId::Mainnet).hash()).await.unwrap().unwrap();
