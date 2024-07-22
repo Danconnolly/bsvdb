@@ -19,7 +19,7 @@ pub enum ChainStoreError {
     /// error sending data through a channel
     SendError(String),
     /// miscellaneous error
-    Misc(String),
+    Internal(String),
     IoError(std::io::Error),
     BitcoinSVError(bitcoinsv::Error),
     FdbError(FdbError),
@@ -36,7 +36,7 @@ impl std::fmt::Display for ChainStoreError {
             ChainStoreError::ParentNotFound => write!(f, "Parent not found"),
             ChainStoreError::CantImplement => write!(f, "Can't implement"),
             ChainStoreError::SendError(s) => write!(f, "error sending data through channel: {}", s),
-            ChainStoreError::Misc(err) => write!(f, "misc error {}", err),
+            ChainStoreError::Internal(err) => write!(f, "internal error {}", err),
             ChainStoreError::IoError(err) => write!(f, "IO error: {}", err),
             ChainStoreError::BitcoinSVError(err) => write!(f, "Bitcoin SV error: {}", err),
             ChainStoreError::FdbError(err) => write!(f, "FDB Error: {}", err),
@@ -49,7 +49,7 @@ impl std::fmt::Display for ChainStoreError {
 
 impl From<&str> for ChainStoreError {
     fn from(err: &str) -> ChainStoreError {
-        ChainStoreError::Misc(String::from(err))
+        ChainStoreError::Internal(String::from(err))
     }
 }
 
