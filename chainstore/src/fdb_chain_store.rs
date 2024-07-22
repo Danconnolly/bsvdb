@@ -1,14 +1,23 @@
 use std::borrow::Cow;
-use std::collections::BTreeMap;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::mpsc::{channel, Receiver, Sender};
+use tokio::sync::oneshot::channel as oneshot_channel;
+use tokio::sync::oneshot::Sender as OneshotSender;
 use tokio::sync::Mutex;
-use tokio::sync::RwLock;
 use async_trait::async_trait;
 use bitcoinsv::bitcoin::{BlockchainId, BlockHash, BlockHeader, Encodable};
 use foundationdb::directory::{Directory, DirectoryOutput};
+use foundationdb::Transaction;
 use foundationdb::tuple::{Bytes, Element, pack, unpack};
+use tokio::task::JoinHandle;
+use tokio::time::sleep;
 use bsvdb_base::ChainStoreConfig;
 use crate::chain_store::ChainState;
-use crate::{BlockId, BlockInfo, BlockValidity, ChainStore, Error, Result};
+use crate::{BlockInfo, BlockValidity, ChainStore, ChainStoreError, ChainStoreResult};
+
 
 /// FDBChainStore is an implementation of ChainStore for foundationdb.
 ///
@@ -17,7 +26,141 @@ use crate::{BlockId, BlockInfo, BlockValidity, ChainStore, Error, Result};
 ///
 /// It uses the foundationdb tuple encoding so that the database can be read by multiple
 /// languages.
+#[derive(Clone)]
 pub struct FDBChainStore {
+    sender: Sender<(FDBChainStoreMessage, OneshotSender<FDBChainStoreReply>)>,
+}
+
+impl FDBChainStore {
+    /// Create a new FDBChainStore.
+    ///
+    /// The root directory supplied as a parameter must be dedicated to the ChainStore. If the
+    /// ChainStore is part of a larger system, then this is probably a sub-directory of the larger
+    /// systems directory. (e.g.: vec!["bsvmain", "chainstore"])
+    pub async fn new(config: &ChainStoreConfig, chain: BlockchainId) -> ChainStoreResult<(Self, JoinHandle<()>)> {
+        let (tx, rx) = channel(1_000);
+        let mut actor = FDBChainStoreActor::new(config, chain, rx).await?;
+        let j = tokio::spawn(async move {actor.run().await});
+        Ok(( FDBChainStore {
+            sender: tx,
+        }, j))
+    }
+
+    /// Shutdown the FDBChainStore, cleaning up and terminating background processes.
+    pub async fn shutdown(&self) -> ChainStoreResult<()> {
+        let (tx, rx) = oneshot_channel();
+        self.sender.send((FDBChainStoreMessage::Shutdown, tx)).await.map_err(|e| {
+            ChainStoreError::SendError(format!("{}", e))
+        })?;
+        match rx.await {
+            Ok(_) => Ok(()),
+            Err(e) => Err(ChainStoreError::from(e)),
+        }
+    }
+}
+
+#[async_trait]
+impl ChainStore for FDBChainStore {
+    type BlockId = u64;
+
+    fn get_chain_state(&self) -> Pin<Box<dyn Future<Output=ChainStoreResult<ChainState<Self::BlockId>>> + Send>> {
+        let sender = self.sender.clone();
+        Box::pin(async move {
+            let (tx, rx) = oneshot_channel();
+            sender.send((FDBChainStoreMessage::ChainState, tx)).await.map_err(|e| {
+                ChainStoreError::SendError(format!("{}", e))
+            })?;
+            match rx.await {
+                Ok(FDBChainStoreReply::ChainStateReply(s)) => Ok(s),
+                Ok(_) => Err(ChainStoreError::Internal("received unexpected reply".into())),
+                Err(e) => Err(ChainStoreError::from(e))
+            }
+        })
+    }
+
+    fn get_block_info(&self, db_id: Self::BlockId) -> Pin<Box<dyn Future<Output=ChainStoreResult<Option<BlockInfo<<Self as ChainStore>::BlockId>>>> + Send>> {
+        let sender = self.sender.clone();
+        Box::pin(async move {
+            let (tx, rx) = oneshot_channel();
+            sender.send((FDBChainStoreMessage::BlockInfo(db_id), tx)).await.map_err(|e| {
+                ChainStoreError::SendError(format!("{}", e))
+            })?;
+            match rx.await {
+                Ok(FDBChainStoreReply::BlockInfoReply(r)) => Ok(r),
+                Ok(_) => Err(ChainStoreError::Internal("received unexpected reply".into())),
+                Err(e) => Err(ChainStoreError::from(e))
+            }
+        })
+    }
+
+    fn get_block_info_by_hash(&self, block_hash: BlockHash) -> Pin<Box<dyn Future<Output=ChainStoreResult<Option<BlockInfo<<Self as ChainStore>::BlockId>>>> + Send>> {
+        let sender = self.sender.clone();
+        Box::pin(async move {
+            let (tx, rx) = oneshot_channel();
+            sender.send((FDBChainStoreMessage::BlockInfoByHash(block_hash), tx)).await.map_err(|e| {
+                ChainStoreError::SendError(format!("{}", e))
+            })?;
+            match rx.await {
+                Ok(FDBChainStoreReply::BlockInfoReply(r)) => Ok(r),
+                Ok(_) => Err(ChainStoreError::Internal("received unexpected reply".into())),
+                Err(e) => Err(ChainStoreError::from(e))
+            }
+        })
+    }
+
+    // todo: how am I going to do this? A stream? start with a vec
+    fn get_block_infos(&self, db_id: Self::BlockId, max_blocks: Option<u64>) -> Pin<Box<dyn Future<Output=ChainStoreResult<Vec<BlockInfo<Self::BlockId>>>> + Send>> {
+        let sender = self.sender.clone();
+        Box::pin(async move {
+            let (tx, rx) = oneshot_channel();
+            sender.send((FDBChainStoreMessage::BlockInfo(db_id), tx)).await.map_err(|e| {
+                ChainStoreError::SendError(format!("{}", e))
+            })?;
+            match rx.await {
+                Ok(FDBChainStoreReply::BlockInfosReply(r)) => Ok(r),
+                Ok(_) => Err(ChainStoreError::Internal("received unexpected reply".into())),
+                Err(e) => Err(ChainStoreError::from(e))
+            }
+        })
+    }
+
+    fn store_block_info(&self, block_info: BlockInfo<Self::BlockId>) -> Pin<Box<dyn Future<Output=ChainStoreResult<BlockInfo<Self::BlockId>>> + Send>> {
+        let sender = self.sender.clone();
+        Box::pin(async move {
+            let (tx, rx) = oneshot_channel();
+            sender.send((FDBChainStoreMessage::StoreBlockInfo(block_info), tx)).await.map_err(|e| {
+                ChainStoreError::SendError(format!("{}", e))
+            })?;
+            match rx.await {
+                Ok(FDBChainStoreReply::BlockInfoReply(Some(r))) => Ok(r),
+                Ok(_) => Err(ChainStoreError::Internal("received unexpected reply".into())),
+                Err(e) => Err(ChainStoreError::from(e))
+            }
+        })
+    }
+}
+
+#[derive(Debug)]
+enum FDBChainStoreMessage {
+    ChainState,
+    BlockInfo(<FDBChainStore as ChainStore>::BlockId),
+    BlockInfoByHash(BlockHash),
+    BlockInfos(<FDBChainStore as ChainStore>::BlockId, Option<u64>),
+    StoreBlockInfo(BlockInfo<<FDBChainStore as ChainStore>::BlockId>),
+    Shutdown,
+}
+
+#[derive(Debug)]
+enum FDBChainStoreReply {
+    ChainStateReply(ChainState<<FDBChainStore as ChainStore>::BlockId>),
+    BlockInfoReply(Option<BlockInfo<<FDBChainStore as ChainStore>::BlockId>>),
+    BlockInfosReply(Vec<BlockInfo<<FDBChainStore as ChainStore>::BlockId>>),
+    Done,
+}
+
+// the chain store agent
+struct FDBChainStoreActor {
+    receiver: Receiver<(FDBChainStoreMessage, OneshotSender<FDBChainStoreReply>)>,
     db: foundationdb::Database,
     // root directory for chainstore
     chain_dir: DirectoryOutput,
@@ -25,13 +168,11 @@ pub struct FDBChainStore {
     infos_dir: DirectoryOutput,
     // hash index directory
     h_index_dir: DirectoryOutput,
-    // hash index cache, with RwLock
-    h_index_cache: RwLock<BTreeMap<BlockHash, BlockId>>,
-    // next_id increment lock
-    next_id_lock: Mutex<u8>,
+    // next_id with lock
+    next_id_lock: Arc<Mutex<u8>>,
 }
 
-impl FDBChainStore {
+impl FDBChainStoreActor {
     // BlockInfo directory - key = BlockId, value = BlockInfo
     const INFOS_DIR: &'static str = "infos";
     // Hash index directory - key = BlockHash, value = BlockId
@@ -46,7 +187,7 @@ impl FDBChainStore {
     /// The root directory supplied as a parameter must be dedicated to the ChainStore. If the
     /// ChainStore is part of a larger system, then this is probably a sub-directory of the larger
     /// systems directory. (e.g.: vec!["bsvmain", "chainstore"])
-    pub async fn new(config: &ChainStoreConfig, chain: BlockchainId) -> Result<Self> {
+    pub async fn new(config: &ChainStoreConfig, chain: BlockchainId, receiver: Receiver<(FDBChainStoreMessage, OneshotSender<FDBChainStoreReply>)>) -> ChainStoreResult<FDBChainStoreActor> {
         let root_dir: Vec<String> = config.root_path.split('/').map(|i| String::from(i)).collect();
         let db = foundationdb::Database::default()?;
         let r_dir = foundationdb::directory::DirectoryLayer::default();
@@ -64,16 +205,15 @@ impl FDBChainStore {
         let i = vec![String::from(Self::H_INDEX_DIR)];
         let h_index_dir = chain_dir.create_or_open(&trx, &i, None, None).await?;
         trx.commit().await?;
-        Self::ensure_db_initialized(&db, &chain_dir, &infos_dir, &h_index_dir, chain).await?;
-        Ok(FDBChainStore {
-            db, chain_dir, infos_dir, h_index_dir, h_index_cache: RwLock::new(BTreeMap::new()),
-            next_id_lock: Mutex::new(5),
+        Self::ensure_db_initialized(&db, &chain_dir, infos_dir.clone(), &h_index_dir, chain).await?;
+        Ok(FDBChainStoreActor {
+            receiver, db, chain_dir, infos_dir, h_index_dir, next_id_lock: Arc::new(Mutex::new(0)),
         })
     }
 
     // ensure that database is initialized
-    async fn ensure_db_initialized(db: &foundationdb::Database, chain_dir: &DirectoryOutput, info_dir: &DirectoryOutput,
-                                   h_index_dir: &DirectoryOutput, chain: BlockchainId) -> Result<()> {
+    async fn ensure_db_initialized(db: &foundationdb::Database, chain_dir: &DirectoryOutput, info_dir: DirectoryOutput,
+                                   h_index_dir: &DirectoryOutput, chain: BlockchainId) -> ChainStoreResult<()> {
         let trx = db.create_trx()?;
         let state_key = Self::get_state_key(chain_dir).unwrap();
         let v = trx.get(&*state_key, false).await?;
@@ -88,7 +228,7 @@ impl FDBChainStore {
             trx.set(&*k, &*v);
             // store genesis BlockInfo
             let gbi = BlockInfo::genesis_info(chain);
-            let k2 = Self::get_block_info_key(info_dir, 0).unwrap();
+            let k2 = Self::get_block_info_key(&info_dir, 0).unwrap();
             let v2 = Self::encode_block_info(&gbi);
             trx.set(&*k2, &*v2);
             let k3 = Self::get_h_index_key(h_index_dir, &gbi.hash).unwrap();
@@ -102,12 +242,12 @@ impl FDBChainStore {
     }
 
     // get the key for the state
-    fn get_state_key(chain_dir: &DirectoryOutput) -> Result<Vec<u8>> {
+    fn get_state_key(chain_dir: &DirectoryOutput) -> ChainStoreResult<Vec<u8>> {
         Ok(chain_dir.pack(&Self::STATE_KEY)?)
     }
 
     // decode ChainState from fdb format
-    pub(crate) fn decode_chain_state(v: &Vec<u8>) -> ChainState {
+    pub(crate) fn decode_chain_state(v: &Vec<u8>) -> ChainState<<FDBChainStore as ChainStore>::BlockId> {
         let (most_work_tip, a, d, i) = unpack::<(u64, Element, Element, Element)>(v).expect("unpack failed in decode_chain_state()");
         let active_tips = a.as_tuple().unwrap().iter().map(|e| e.as_i64().unwrap() as u64).collect();
         let dormant_tips = d.as_tuple().unwrap().iter().map(|e| e.as_i64().unwrap() as u64).collect();
@@ -118,33 +258,33 @@ impl FDBChainStore {
     }
 
     // encode ChainState to fdb format
-    pub(crate) fn encode_chain_state(cs: &ChainState) -> Vec<u8> {
+    pub(crate) fn encode_chain_state(cs: &ChainState<<FDBChainStore as ChainStore>::BlockId>) -> Vec<u8> {
         pack(&(cs.most_work_tip, &cs.active_tips, &cs.dormant_tips, &cs.invalid_tips))
     }
 
     // get the key for the next_id
-    fn get_next_id_key(chain_dir: &DirectoryOutput) -> Result<Vec<u8>> {
+    fn get_next_id_key(chain_dir: &DirectoryOutput) -> ChainStoreResult<Vec<u8>> {
         Ok(chain_dir.pack(&Self::NEXT_ID_KEY)?)
     }
 
     // decode the next_id from fdb
-    pub(crate) fn decode_next_id(v: &Vec<u8>) -> BlockId {
+    pub(crate) fn decode_next_id(v: &Vec<u8>) -> <FDBChainStore as ChainStore>::BlockId {
         let (i, )  = unpack(v).expect("unpack failed in decode_next_id()");
         return i;
     }
 
     // encode the next_id into fdb
-    pub(crate) fn encode_next_id(v: BlockId) -> Vec<u8> {
+    pub(crate) fn encode_next_id(v: <FDBChainStore as ChainStore>::BlockId) -> Vec<u8> {
         pack(&(v, ))
     }
 
     // get the key for the BlockInfo
-    fn get_block_info_key(info_dir: &DirectoryOutput, block_id: BlockId) -> Result<Vec<u8>> {
+    fn get_block_info_key(info_dir: &DirectoryOutput, block_id: <FDBChainStore as ChainStore>::BlockId) -> ChainStoreResult<Vec<u8>> {
         Ok(info_dir.pack(&block_id)?)
     }
 
     // decode the BlockInfo from fdb
-    pub(crate) fn decode_block_info(v: &Vec<u8>) -> BlockInfo {
+    pub(crate) fn decode_block_info(v: &Vec<u8>) -> BlockInfo<<FDBChainStore as ChainStore>::BlockId> {
         // the tuple is too large for the shortcut implementation
         let i = unpack::<Vec<Element>>(v).expect("unpack failed in decode_block_info()");
         let hash = BlockHash::from(i[1].as_bytes().unwrap().to_vec().as_slice());
@@ -170,7 +310,7 @@ impl FDBChainStore {
     }
 
     // encode the block_info into fdb
-    pub(crate) fn encode_block_info(v: &BlockInfo) -> Vec<u8> {
+    pub(crate) fn encode_block_info(v: &BlockInfo<<FDBChainStore as ChainStore>::BlockId>) -> Vec<u8> {
         let hash = Element::Bytes(Bytes::from(Vec::from(v.hash.hash)));
         let hdr = Element::Bytes(Bytes::from(v.header.to_binary_buf().unwrap()));
         let m = match v.miner.clone() {
@@ -195,154 +335,210 @@ impl FDBChainStore {
     }
 
     // get the key for the hash index
-    fn get_h_index_key(h_index_dir: &DirectoryOutput, block_hash: &BlockHash) -> Result<Vec<u8>> {
+    fn get_h_index_key(h_index_dir: &DirectoryOutput, block_hash: &BlockHash) -> ChainStoreResult<Vec<u8>> {
         Ok(h_index_dir.pack(&block_hash.to_binary_buf().unwrap())?)
     }
 
     // decode the hash index value from fdb
-    pub(crate) fn decode_h_index(v: &Vec<u8>) -> BlockId {
+    pub(crate) fn decode_h_index(v: &Vec<u8>) -> <FDBChainStore as ChainStore>::BlockId {
         let (i, )  = unpack(v).expect("unpack failed in decode_h_index()");
         return i;
     }
 
     // encode the hash index value into fdb
-    pub(crate) fn encode_h_index(v: BlockId) -> Vec<u8> {
+    pub(crate) fn encode_h_index(v: <FDBChainStore as ChainStore>::BlockId) -> Vec<u8> {
         pack(&(v, ))
     }
 
     // get the BlockId from the hash
-    pub(crate) async fn get_block_id_from_hash(&mut self, block_hash: &BlockHash) -> Result<Option<BlockId>> {
-        match self.h_index_cache.read().await.get(block_hash) {
-            Some(id) => Ok(Some(*id)),
-            None => {
-                let k = Self::get_h_index_key(&self.h_index_dir, block_hash)?;
-                let trx = self.db.create_trx()?;
-                let v = trx.get(k.as_slice(), false).await?;
-                trx.cancel();
-                if v.is_none() {
-                    return Ok(None);
-                }
-                let i = Self::decode_h_index(&v.unwrap().to_vec());
-                self.h_index_cache.write().await.insert(block_hash.clone(), i);
-                Ok(Some(i))
-            },
+    pub(crate) async fn get_block_id_from_hash(trx: &Transaction, block_hash: &BlockHash, h_index_dir: &DirectoryOutput)
+        -> ChainStoreResult<Option<<FDBChainStore as ChainStore>::BlockId>> {
+        let k = Self::get_h_index_key(h_index_dir, block_hash)?;
+        let v = trx.get(k.as_slice(), false).await?;
+        if v.is_none() {
+            return Ok(None);
         }
+        let i = Self::decode_h_index(&v.unwrap().to_vec());
+        Ok(Some(i))
     }
 
-    async fn get_next_id(&self) -> Result<BlockId> {
+    async fn get_next_id(trx: &Transaction, next_id: &Mutex<u8>, chain_dir: &DirectoryOutput) -> ChainStoreResult<<FDBChainStore as ChainStore>::BlockId> {
         // only do one of these at a time to prevent db transaction clashes
-        let _lck = self.next_id_lock.lock().await;
-        let trx = self.db.create_trx().unwrap();
-        let k = Self::get_next_id_key(&self.chain_dir).unwrap();
+        let k = Self::get_next_id_key(chain_dir).unwrap();
+        let _lck = next_id.lock().await;
         let v= trx.get(&*k, false).await.unwrap().unwrap();
         let id = Self::decode_next_id(&v.to_vec());
         let v2 = Self::encode_next_id(id+1);
         trx.set(&*k, &*v2);
-        trx.commit().await.unwrap();
         Ok(id)
     }
-}
 
-#[async_trait]
-impl ChainStore for FDBChainStore {
-    async fn get_chain_state(&mut self) -> Result<ChainState> {
+    async fn get_chain_state(&self, reply: OneshotSender<FDBChainStoreReply>) -> ChainStoreResult<JoinHandle<()>> {
         let k = Self::get_state_key(&self.chain_dir)?;
         let trx = self.db.create_trx()?;
-        let v = trx.get(k.as_slice(), false).await?.unwrap();
-        trx.cancel();
-        Ok(FDBChainStore::decode_chain_state(&v.to_vec()))
+        Ok(tokio::spawn(async move {
+            let v = trx.get(k.as_slice(), false).await.unwrap().expect("chainstate missing from db");
+            let r = Self::decode_chain_state(&v.to_vec());
+            reply.send(FDBChainStoreReply::ChainStateReply(r)).expect("send of reply failed in get_chain_state()");
+        }))
     }
 
-    async fn get_block_info(&mut self, db_id: &BlockId) -> Result<Option<BlockInfo>> {
-        let k = Self::get_block_info_key(&self.infos_dir, *db_id)?;
+    async fn get_block_info(&self, db_id: <FDBChainStore as ChainStore>::BlockId, reply: OneshotSender<FDBChainStoreReply>) ->ChainStoreResult<JoinHandle<()>> {
+        let k = Self::get_block_info_key(&self.infos_dir, db_id)?;
         let trx = self.db.create_trx()?;
-        let v = trx.get(k.as_slice(), false).await?;
-        trx.cancel();
-        if v.is_none() {
-            Ok(None)
-        } else {
-            Ok(Some(Self::decode_block_info(&v.unwrap().to_vec())))
-        }
+        Ok(tokio::spawn(async move {
+            let r = trx.get(k.as_slice(), false).await.unwrap();
+            reply.send(FDBChainStoreReply::BlockInfoReply(match r {
+                Some(i) => Some(Self::decode_block_info(&i.to_vec())),
+                None => None,
+            })).expect("send of reply failed in get_block_info()");
+        }))
     }
 
-    async fn get_block_info_by_hash(&mut self, hash: &BlockHash) -> Result<Option<BlockInfo>> {
-        match self.get_block_id_from_hash(hash).await? {
-            None => Ok(None),
-            Some(id) => self.get_block_info(&id).await
-        }
-    }
-
-    async fn get_block_infos(&mut self, db_id: &BlockId, max_blocks: Option<u64>) -> Result<Vec<BlockInfo>> {
-        todo!()
-    }
-
-    async fn store_block_info(&mut self, block_info: BlockInfo) -> Result<BlockInfo> {
-        let mut result = block_info.clone();
-        match self.get_block_id_from_hash(&result.hash).await? {
+    async fn sub_block_info_by_hash(trx: &Transaction, hash: &BlockHash, h_index_dir: &DirectoryOutput, infos_dir: &DirectoryOutput) -> ChainStoreResult<Option<BlockInfo<<FDBChainStore as ChainStore>::BlockId>>> {
+        match Self::get_block_id_from_hash(trx, hash, h_index_dir).await? {
             None => {
-                let id = self.get_next_id().await?;
-                let k = Self::get_h_index_key(&self.h_index_dir, &result.hash).unwrap();
-                let v = Self::encode_h_index(id);
-                let trx = self.db.create_trx().unwrap();
-                trx.set(&*k, &*v);
-                trx.commit().await?;
-                result.id = id;
+                Ok(None)
             },
             Some(id) => {
-                result.id = id;
+                let k = Self::get_block_info_key(infos_dir, id)?;
+                let r = trx.get(k.as_slice(), false).await.unwrap();
+                match r {
+                    Some(i) => Ok(Some(Self::decode_block_info(&i.to_vec()))),
+                    None => Ok(None),
+                }
             }
         }
-        let parent = self.get_block_info_by_hash(&result.header.prev_hash).await?;
-        if parent.is_none() {
-            return Err(Error::ParentNotFound)
-        }
-        let mut parent = parent.unwrap();
-        let trx = self.db.create_trx().unwrap();    // start the update transaction
-        // check that the child is listed in the parents next_ids
-        if ! parent.next_ids.contains(&result.id) {
-            // update the next_ids in the parent and save it
-            parent.next_ids.push(result.id);
-            let k = Self::get_block_info_key(&self.infos_dir, parent.id).unwrap();
-            let v = Self::encode_block_info(&parent);
-            trx.set(&*k, &*v);
-        }
-        // update total_size & total_tx if possible
-        if parent.total_size.is_some() && result.size.is_some() {
-            result.total_size = Some(parent.total_size.unwrap() + result.size.unwrap())
-        }
-        if parent.total_tx.is_some() && result.num_tx.is_some() {
-            result.total_tx = Some(parent.total_tx.unwrap() + result.num_tx.unwrap())
-        }
-        // update height, prev_id, and validity
-        result.height = parent.height + 1;
-        result.prev_id = parent.id;
-        result.validity = match parent.validity {
-            BlockValidity::Unknown => BlockValidity::Unknown,
-            BlockValidity::Valid => result.validity,
-            BlockValidity::ValidHeader => {
-                if result.validity == BlockValidity::Valid {
-                    BlockValidity::ValidHeader
-                } else {
-                    result.validity
+    }
+
+    async fn get_block_info_by_hash(&self, hash: BlockHash, reply: OneshotSender<FDBChainStoreReply>) -> ChainStoreResult<JoinHandle<()>> {
+        let trx = self.db.create_trx()?;
+        let h_index_dir = self.h_index_dir.clone();
+        let infos_dir = self.infos_dir.clone();
+        Ok(tokio::spawn(async move {
+            let r = Self::sub_block_info_by_hash(&trx, &hash, &h_index_dir, &infos_dir).await.expect("failure during get block info by hash()");
+            reply.send(FDBChainStoreReply::BlockInfoReply(r)).expect("failed to send reply");
+        }))
+    }
+
+    // async fn get_block_infos(&mut self, db_id: &FDBChainStore::BlockId, max_blocks: Option<u64>) -> ChainStoreResult<Vec<BlockInfo>> {
+    //     todo!()
+    // }
+
+    async fn store_block_info(&self, mut block_info: BlockInfo<<FDBChainStore as ChainStore>::BlockId>, reply: OneshotSender<FDBChainStoreReply>) ->
+                                                                                                        ChainStoreResult<JoinHandle<()>> {
+        let trx = self.db.create_trx()?;
+        let h_index_dir = self.h_index_dir.clone();
+        let chain_dir = self.chain_dir.clone();
+        let infos_dir = self.infos_dir.clone();
+        let next_id_lck = self.next_id_lock.clone();
+        Ok(tokio::spawn(async move {
+            match Self::get_block_id_from_hash(&trx, &block_info.hash, &h_index_dir).await.expect("couldnt get block id from hash") {
+                None => {
+                    let id = Self::get_next_id(&trx, &next_id_lck, &chain_dir).await.expect("couldnt get next_id");
+                    let k = Self::get_h_index_key(&h_index_dir, &block_info.hash).unwrap();
+                    let v = Self::encode_h_index(id);
+                    trx.set(&*k, &*v);
+                    block_info.id = id;
+                },
+                Some(id) => {
+                    block_info.id = id;
                 }
-            },
-            BlockValidity::Invalid => BlockValidity::InvalidAncestor,
-            BlockValidity::HeaderInvalid => BlockValidity::InvalidAncestor,
-            BlockValidity::InvalidAncestor => BlockValidity::InvalidAncestor,
-        };
-        // save the block info
-        let k = Self::get_block_info_key(&self.infos_dir, result.id).unwrap();
-        let v = Self::encode_block_info(&result);
-        trx.set(&*k, &*v);
-        trx.commit().await?;
-        Ok(result)
+            }
+            let parent = Self::sub_block_info_by_hash(&trx, &block_info.header.prev_hash, &h_index_dir, &infos_dir ).await.expect("failed to get parent by hash");
+            if parent.is_none() {
+                panic!("parent not found");
+                // return Err(ChainStoreError::ParentNotFound)
+            }
+            let mut parent = parent.unwrap();
+            // check that the child is listed in the parents next_ids
+            if ! parent.next_ids.contains(&block_info.id) {
+                // update the next_ids in the parent and save it
+                parent.next_ids.push(block_info.id);
+                let k = Self::get_block_info_key(&infos_dir, parent.id).unwrap();
+                let v = Self::encode_block_info(&parent);
+                trx.set(&*k, &*v);
+            }
+            // update total_size & total_tx if possible
+            if parent.total_size.is_some() && block_info.size.is_some() {
+                block_info.total_size = Some(parent.total_size.unwrap() + block_info.size.unwrap())
+            }
+            if parent.total_tx.is_some() && block_info.num_tx.is_some() {
+                block_info.total_tx = Some(parent.total_tx.unwrap() + block_info.num_tx.unwrap())
+            }
+            // update height, prev_id, and validity
+            block_info.height = parent.height + 1;
+            block_info.prev_id = parent.id;
+            block_info.validity = match parent.validity {
+                BlockValidity::Unknown => BlockValidity::Unknown,
+                BlockValidity::Valid => block_info.validity,
+                BlockValidity::ValidHeader => {
+                    if block_info.validity == BlockValidity::Valid {
+                        BlockValidity::ValidHeader
+                    } else {
+                        block_info.validity
+                    }
+                },
+                BlockValidity::Invalid => BlockValidity::InvalidAncestor,
+                BlockValidity::HeaderInvalid => BlockValidity::InvalidAncestor,
+                BlockValidity::InvalidAncestor => BlockValidity::InvalidAncestor,
+            };
+            // save the block info
+            let k = Self::get_block_info_key(&infos_dir, block_info.id).unwrap();
+            let v = Self::encode_block_info(&block_info);
+            trx.set(&*k, &*v);
+            trx.commit().await.expect("couldnt commit transaction");
+            reply.send(FDBChainStoreReply::BlockInfoReply(Option::from(block_info))).expect("send of reply failed in store_block_info()");
+        }))
+    }
+
+    // main actor thread
+    async fn run(&mut self) -> () {
+        let mut tasks = vec![];
+        loop {
+            tokio::select! {
+                Some((msg, reply)) = self.receiver.recv() => {
+                    match msg {
+                        FDBChainStoreMessage::ChainState => {
+                            let j = self.get_chain_state(reply).await.unwrap();
+                            tasks.push(j);
+                        },
+                        FDBChainStoreMessage::BlockInfo(db_id) => {
+                            let j = self.get_block_info(db_id, reply).await.unwrap();
+                            tasks.push(j);
+                        },
+                        FDBChainStoreMessage::BlockInfoByHash(block_hash) => {
+                            let j = self.get_block_info_by_hash(block_hash, reply).await.unwrap();
+                            tasks.push(j);
+                        },
+                        FDBChainStoreMessage::BlockInfos(a, b) => {}, // todo
+                        FDBChainStoreMessage::StoreBlockInfo(a) => {
+                            let j = self.store_block_info(a, reply).await.unwrap();
+                            tasks.push(j);
+                        },
+                        FDBChainStoreMessage::Shutdown => {
+                            reply.send(FDBChainStoreReply::Done).expect("unexpected failure shutting down");
+                            break;
+                        }
+                    };
+                },
+                else => {
+                    sleep(Duration::from_millis(100)).await;
+                }
+            }
+            // todo: clean up completed handles
+            // let mut t2 = vec![];
+            // for t in tasks {
+            //
+            // }
+        }
     }
 }
 
 
 #[cfg(test)]
 mod tests {
-    use hex::FromHex;
+    
     use super::*;
 
     #[test]
@@ -350,24 +546,24 @@ mod tests {
         let s = ChainState {
             most_work_tip: 2, active_tips: vec![3,4], dormant_tips: vec![], invalid_tips: vec![6,7]
         };
-        let p = FDBChainStore::encode_chain_state(&s);
-        let u = FDBChainStore::decode_chain_state(&p);
+        let p = FDBChainStoreActor::encode_chain_state(&s);
+        let u = FDBChainStoreActor::decode_chain_state(&p);
         assert_eq!(u, s);
     }
 
     #[test]
     fn block_info_encoding() {
         let b = BlockInfo::genesis_info(BlockchainId::Mainnet);
-        let p = FDBChainStore::encode_block_info(&b);
-        let v = FDBChainStore::decode_block_info(&p);
+        let p = FDBChainStoreActor::encode_block_info(&b);
+        let v = FDBChainStoreActor::decode_block_info(&p);
         assert_eq!(b, v);
     }
 
     #[test]
     fn hash_index_encodring() {
         let i = 76265u64;
-        let j = FDBChainStore::encode_h_index(i);
-        let k = FDBChainStore::decode_h_index(&j);
+        let j = FDBChainStoreActor::encode_h_index(i);
+        let k = FDBChainStoreActor::decode_h_index(&j);
         assert_eq!(i, k);
     }
 

@@ -6,20 +6,75 @@ use bsvdb_chainstore::{BlockInfo, BlockValidity, ChainStore, FDBChainStore};
 use rand::random;
 use bsvdb_base::ChainStoreConfig;
 
+
 #[tokio::test]
-async fn check_store() {
+async fn run_fdb_tests() {
     let network = unsafe { foundationdb::boot() };
+
     // get a unique root
     let r_id: u16 = random();
     let root = format!("testing{}", r_id);
     let config = ChainStoreConfig {
         enabled: true,
-        root_path: root,,
+        root_path: root,
+    };
+    let (chain_store, j) = FDBChainStore::new(&config, BlockchainId::Mainnet).await.unwrap();
+
+    check_clone_store(&chain_store).await;
+    check_multi_spawn(&chain_store).await;
+    check_store(&chain_store).await;
+
+    chain_store.shutdown().await.expect("failed shutting down");
+    j.await.expect("failed waiting for task to terminate.");
+
+    let db = foundationdb::Database::default().expect("failed opening db for cleanup");
+    let root_dir: Vec<String> = config.root_path.split('/').map(|i| String::from(i)).collect();
+    let tx = db.create_trx().expect("failed creating transaction");
+    let d = foundationdb::directory::DirectoryLayer::default();
+    d.remove(&tx, &root_dir).await.expect("error removing test directory");
+    tx.commit().await.expect("failed committing transaction");
+
+    drop(network);
+}
+
+/// Check that we can clone the chainstore into a separate task
+async fn check_clone_store(chain_store: &FDBChainStore) {
+
+    let c2 = chain_store.clone();
+    let j = tokio::spawn(async move {
+       c2.get_block_info(0).await
+    });
+    let k = chain_store.get_block_info(0).await;
+    assert!(k.is_ok());
+    let l = j.await;
+    assert!(l.is_ok());
+}
+
+/// Check that we can spawn multiple instances of queries running simultaneously
+async fn check_multi_spawn(chain_store: &FDBChainStore) {
+    // can we do lots of reads at once?
+    let mut v = vec![];
+    for i in 0..9 {
+        let i = chain_store.get_block_info(i);
+        let j = tokio::spawn(i);
+        v.push(j);
     }
-    let mut chain_store = FDBChainStore::new(&config, BlockchainId::Mainnet).await.unwrap();
+    while ! v.is_empty() {
+        let j = v.pop().unwrap();
+        let r = j.await;
+        assert!(r.is_ok());
+        let i = r.unwrap();
+        assert!(i.is_ok());
+    }
+}
+
+async fn check_store(chain_store: &FDBChainStore) {
+    // check chain_state
+    let cs = chain_store.get_chain_state().await.unwrap();
+    assert_eq!(cs.most_work_tip, 0);        // expecting empty db with only genesis block
 
     // get genesis block by id
-    let g_block = chain_store.get_block_info(&0).await.unwrap();
+    let g_block = chain_store.get_block_info(0).await.unwrap();
     assert!(g_block.is_some());
     let g_block = g_block.unwrap();
     assert_eq!(g_block.hash, BlockHeader::get_genesis(BlockchainId::Mainnet).hash());
@@ -27,7 +82,7 @@ async fn check_store() {
     assert_eq!(g_block.size, Some(285));
 
     // get genesis block by hash
-    let g_block2 = chain_store.get_block_info_by_hash(&BlockHeader::get_genesis(BlockchainId::Mainnet).hash()).await.unwrap().unwrap();
+    let g_block2 = chain_store.get_block_info_by_hash(BlockHeader::get_genesis(BlockchainId::Mainnet).hash()).await.unwrap().unwrap();
     assert_eq!(g_block2.height, 0);
 
     let hdr1 = BlockHeader::from_hex("010000006fe28c0ab6f1b372c1a6a246ae63f74f931e8365e15a089c68d6190000000000982051fd1e4ba744bbbe680e1fee14677ba1a3c3540bf7b1cdb606e857233e0e61bc6649ffff001d01e36299").unwrap();
@@ -55,15 +110,7 @@ async fn check_store() {
     assert_eq!(i2.prev_id, 0);
     assert_eq!(i2.total_tx, Some(2));
     assert_eq!(i2.total_size, Some(500));
-    let g2 = chain_store.get_block_info(&0).await.unwrap().unwrap();
+    let g2 = chain_store.get_block_info(0).await.unwrap().unwrap();
     assert_eq!(g2.next_ids, vec![1]);
-
-    // clear the testing directory
-    let fdb = foundationdb::Database::default().unwrap();
-    let dir = foundationdb::directory::DirectoryLayer::default();
-    let trx = fdb.create_trx().unwrap();
-    let r = dir.remove(&trx, &*root).await.unwrap();
-    trx.commit().await.unwrap();
-
-    drop(network);
 }
+

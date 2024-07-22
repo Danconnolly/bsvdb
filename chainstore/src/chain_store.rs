@@ -1,6 +1,7 @@
+use std::future::Future;
 use async_trait::async_trait;
 use bitcoinsv::bitcoin::{BlockchainId, BlockHash, BlockHeader};
-use crate::result::Result;
+use crate::ChainStoreResult;
 
 /// A ChainStore stores information about a blockchain.
 ///
@@ -11,24 +12,37 @@ use crate::result::Result;
 ///
 /// Each ChainStore is associated with a particular blockchain (e.g. mainnet, testnet, etc).
 ///
-/// The initialization of the ChainStore is not defined here, but it must be initialized with the
-/// genesis block.
+/// All functions return a future that can be safely sent between threads, enabling parallel execution
+/// of the futures returned by the functions.
+///
+/// The initialization of the ChainStore is not defined here, each implementation may have
+/// different initialization needs. However, each new ChainStore must be initialized with the genesis block
+/// for the blockchain that it is intended for.
+///
+/// Each implementation of ChainStore is expected to support async parallelization, as described
+/// in the development notes (Developing Parallel Access to Databases)[/docs/dev-parallel-dbs.md].
 #[async_trait]
 pub trait ChainStore {
-    /// Returns the current state of the blockchain.
-    async fn get_chain_state(&mut self) -> Result<ChainState>;
+    /// The BlockId is a unique identifier for a block in the ChainStore.
+    type BlockId;
 
-    /// Returns the block info for the block with the given id.
-    async fn get_block_info(&mut self, db_id: &BlockId) -> Result<Option<BlockInfo>>;
+    /// Returns the current state of the blockchain.
+    fn get_chain_state(&self) -> impl Future<Output=ChainStoreResult<ChainState<Self::BlockId>>> + Send;
+
+    /// Get the block info for the block with the given id.
+    ///
+    /// Returns a future that will produce the results.
+    fn get_block_info(&self, db_id: Self::BlockId) -> impl Future<Output=ChainStoreResult<Option<BlockInfo<Self::BlockId>>>> + Send;
 
     /// Returns the block info for the block with the given hash.
-    async fn get_block_info_by_hash(&mut self, hash: &BlockHash) -> Result<Option<BlockInfo>>;
+    fn get_block_info_by_hash(&self, hash: BlockHash) -> impl Future<Output=ChainStoreResult<Option<BlockInfo<Self::BlockId>>>> + Send;
 
     /// Returns the block infos for the block and its ancestors.
     ///
     /// Return at most max_blocks block infos, if given, otherwise return all block infos to the
     /// genesis block.
-    async fn get_block_infos(&mut self, db_id: &BlockId, max_blocks: Option<u64>) -> Result<Vec<BlockInfo>>;
+    /// todo: convert to stream
+    fn get_block_infos(&self, db_id: Self::BlockId, max_blocks: Option<u64>) -> impl Future<Output=ChainStoreResult<Vec<BlockInfo<Self::BlockId>>>> + Send;
 
     /// Store the block info in the ChainStore, returning an updated BlockInfo structure.
     ///
@@ -55,11 +69,8 @@ pub trait ChainStore {
     ///
     /// If the validity of the parent block is HeaderInvalid, then the validity of the child block is
     /// InvalidAncestor.
-    async fn store_block_info(&mut self, block_info: BlockInfo) -> Result<BlockInfo>;
+    fn store_block_info(&self, block_info: BlockInfo<Self::BlockId>) -> impl Future<Output=ChainStoreResult<BlockInfo<Self::BlockId>>> + Send;
 }
-
-/// The BlockId is a unique identifier for a block in the ChainStore.
-pub type BlockId = u64;
 
 /// The BlockValidity enum describes the validity of a block.
 #[derive(Debug, Clone, PartialEq)]
@@ -80,7 +91,7 @@ pub enum BlockValidity {
 
 /// The BlockInfo struct contains information about a block.
 #[derive(Debug, Clone, PartialEq)]
-pub struct BlockInfo {
+pub struct BlockInfo<BlockId> {
     pub id: BlockId,
     pub hash: BlockHash,
     pub header: BlockHeader,
@@ -99,7 +110,7 @@ pub struct BlockInfo {
 
 /// The ChainState struct contains the current tips of the blockchain.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ChainState {
+pub struct ChainState<BlockId> {
     /// The block id of the tip with the most proof-of-work.
     ///
     /// If multiple tips have the most proof-of-work, then this is one of them.
@@ -143,9 +154,9 @@ impl From<BlockValidity> for u8 {
     }
 }
 
-impl BlockInfo {
+impl BlockInfo<u64> {
     /// Get the BlockInfo for the genesis block.
-    pub fn genesis_info(block_chain: BlockchainId) -> BlockInfo {
+    pub fn genesis_info(block_chain: BlockchainId) -> BlockInfo<u64> {
         let g_hdr = BlockHeader::get_genesis(block_chain);
         let mut info = BlockInfo {
             id: 0,
