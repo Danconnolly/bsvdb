@@ -1,11 +1,13 @@
 mod result;
 mod ba;
 mod global;
+mod cs;
 
 use bitcoinsv::bitcoin::BlockHash;
 use clap::{Parser, Subcommand};
 use bsvdb_base::{BSVDBConfig};
 use crate::ba::{check_all_blocks, check_block, check_links, header, list_blocks, rpc_import};
+use crate::cs::get_block_info;
 use crate::global::{sync_piped};
 
 /// A CLI for managing bsvdb components and systems.
@@ -30,11 +32,17 @@ enum CommandOrSystem {
         #[command(subcommand)]
         ba_cmd: BACommands
     },
+    /// Chain Store commands.
+    CS {
+        #[command(subcommand)]
+        cs_cmd: CSCommands
+    },
     /// Synchronize system.
     #[clap(long_about = "synchronizes data between various components, such as importing blocks from blockstore to chainstore.")]
     Sync,
 }
 
+/// Block Archive commands.
 #[derive(Subcommand, Debug)]
 enum BACommands {
     /// Perform checks on the archive.
@@ -59,6 +67,7 @@ enum BACommands {
     List,
 }
 
+// Block Archive check commands.
 #[derive(Subcommand, Debug)]
 enum BACheckCommands {
     /// Check that all blocks are linked in the archive (except the Genesis block).  WARNING: this may take a long time.
@@ -80,6 +89,7 @@ enum BACheckCommands {
     Blocks,
 }
 
+/// Block Archive import commands.
 #[derive(Subcommand, Debug)]
 enum BAImportCommands {
     /// Import blocks over an RPC connection from an SV Node.
@@ -91,6 +101,16 @@ enum BAImportCommands {
     }
 }
 
+/// Chain Store commands.
+#[derive(Subcommand, Debug)]
+enum CSCommands {
+    /// Get information about a block.
+    Block {
+        /// Block hash.
+        block_hash: BlockHash,
+    },
+}
+
 #[tokio::main]
 async fn main() {
     let args: Args = Args::parse();
@@ -98,7 +118,7 @@ async fn main() {
     match args.cmd {
         CommandOrSystem::BA{ba_cmd} => {
             if ! config.block_archive.enabled {
-                println!("BlockArchive configuration not set.");
+                println!("BlockArchive is not enabled.");
                 return;
             }
             let ba_config = config.block_archive;
@@ -131,6 +151,18 @@ async fn main() {
                 }
             }
         },
+        CommandOrSystem::CS{ cs_cmd } => {
+            if ! config.chain_store.enabled {
+                println!("ChainStore is not enabled.")
+            }
+            let network = unsafe { foundationdb::boot() };
+            match cs_cmd {
+                CSCommands::Block {block_hash} => {
+                    get_block_info(&config, block_hash).await;
+                }
+            }
+            drop(network);
+        }
         CommandOrSystem::Sync => {
             sync_piped(&config).await.unwrap();
         }
