@@ -1,16 +1,13 @@
-use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
-use std::io::Chain;
 use std::pin::Pin;
-use std::process::Output;
 use std::time::Instant;
-use tokio::sync::mpsc::{channel, Receiver, Sender};
-use bitcoinsv::bitcoin::{BlockHash, BlockHeader};
+use tokio::sync::mpsc::{channel, Sender};
+use bitcoinsv::bitcoin::BlockHash;
 use futures::StreamExt;
 use bsvdb_base::BSVDBConfig;
 use crate::result::CliResult;
-use bsvdb_blockarchive::{BlockArchive, BlockHashListStream, SimpleFileBasedBlockArchive};
-use bsvdb_chainstore::{BlockInfo, BlockValidity, ChainStore, FDBChainStore};
+use bsvdb_blockarchive::{BlockArchive, SimpleFileBasedBlockArchive};
+use bsvdb_chainstore::{BlockInfo, ChainStore, FDBChainStore};
 use bsvdb_chainstore::ChainStoreResult;
 
 
@@ -149,7 +146,7 @@ pub async fn sync_piped(config: &BSVDBConfig) -> CliResult<()> {
     const BUFFER_SIZE:usize = 1000;
 
     type Stage1Result = (Pin<Box<dyn Future<Output=ChainStoreResult<Option<BlockInfo<<FDBChainStore as ChainStore>::BlockId>>>> + Send>>, BlockHash);
-    pub async fn stage1(mut block_hashes: Vec<BlockHash>, chain_store: FDBChainStore,
+    pub async fn stage1(block_hashes: Vec<BlockHash>, chain_store: FDBChainStore,
                         sender: Sender<Stage1Result>) -> CliResult<()> {
         for block_hash in block_hashes {
             let j = chain_store.get_block_info_by_hash(block_hash);
@@ -223,7 +220,7 @@ pub async fn sync_piped(config: &BSVDBConfig) -> CliResult<()> {
 
     println!("starting sync from blockstore to chainstore");
     let mut block_archive = SimpleFileBasedBlockArchive::new(&config.block_archive).await?;
-    let (mut chain_store, _j_chain_store) = FDBChainStore::new(&config.chain_store, config.get_blockchain_id()).await?;
+    let (chain_store, _j_chain_store) = FDBChainStore::new(&config.chain_store, config.get_blockchain_id()).await?;
 
     let mut i = block_archive.block_list().await?;
     let mut r = vec![];
