@@ -2,6 +2,7 @@ use std::borrow::Cow;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::sync::oneshot::channel as oneshot_channel;
 use tokio::sync::oneshot::Sender as OneshotSender;
@@ -12,6 +13,7 @@ use foundationdb::directory::{Directory, DirectoryOutput};
 use foundationdb::Transaction;
 use foundationdb::tuple::{Bytes, Element, pack, unpack};
 use tokio::task::JoinHandle;
+use tokio::time::sleep;
 use bsvdb_base::ChainStoreConfig;
 use crate::chain_store::ChainState;
 use crate::{BlockInfo, BlockValidity, ChainStore, ChainStoreError, ChainStoreResult};
@@ -492,8 +494,8 @@ impl FDBChainStoreActor {
 
     // main actor thread
     async fn run(&mut self) -> () {
+        let mut tasks = vec![];
         loop {
-            let mut tasks = vec![];
             tokio::select! {
                 Some((msg, reply)) = self.receiver.recv() => {
                     match msg {
@@ -519,6 +521,9 @@ impl FDBChainStoreActor {
                             break;
                         }
                     };
+                },
+                else => {
+                    sleep(Duration::from_millis(100)).await;
                 }
             }
             // todo: clean up completed handles
