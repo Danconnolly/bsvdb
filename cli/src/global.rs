@@ -128,15 +128,20 @@ pub async fn sync2(config: &BSVDBConfig) -> CliResult<()> {
     let mut block_archive = SimpleFileBasedBlockArchive::new(&config.block_archive).await?;
     let mut chain_store = FDBChainStore::new(&config.chain_store, config.get_blockchain_id()).await?;
 
-    let mut missing_headers = BTreeMap::new();    // headers of missing blocks
-    let mut parent_hashes = BTreeMap::new();   // parent hash -> vec of block hash
-    let mut known_parents = BTreeSet::new();                        // hashes of parents which are known for blocks which are unknown
+    // let mut missing_headers = BTreeMap::new();    // headers of missing blocks
+    // let mut parent_hashes = BTreeMap::new();   // parent hash -> vec of block hash
+    // let mut known_parents = BTreeSet::new();                        // hashes of parents which are known for blocks which are unknown
     println!("starting sync from blockstore to chainstore");
     let mut i = block_archive.block_list().await?;
     let mut num_found = 0;
     let mut checked = 0;
-    let start_time = Instant::now();
+    // get all blocks first, for performance testing
+    let mut block_hashes = vec![];
     while let Some(block_hash) = i.next().await {
+        block_hashes.push(block_hash);
+    }
+    let start_time = Instant::now();
+    for block_hash in block_hashes {
         match chain_store.get_block_info_by_hash(&block_hash).await? {
             Some(_info) => {
                 // already have block
@@ -144,29 +149,29 @@ pub async fn sync2(config: &BSVDBConfig) -> CliResult<()> {
                 // todo: check whether we need to update the values
             },
             None => {
-                let hdr = block_archive.block_header(&block_hash).await.unwrap();
-                // insert into parent_hashes index - there can be multiple blocks with the same parent
-                match parent_hashes.get(&hdr.prev_hash) {
-                    None => {
-                        parent_hashes.insert(hdr.prev_hash, vec![hdr.hash()]);
-                    },
-                    Some(v) => {
-                        let mut v2 = v.clone();
-                        v2.push(hdr.hash());
-                        parent_hashes.insert(hdr.prev_hash, v2);
-                    }
-                }
-                // check if we know the parent
-                match chain_store.get_block_info_by_hash(&hdr.prev_hash).await? {
-                    Some(p_info) => {
-                        known_parents.insert(p_info.hash);
-                    },
-                    None => {
-                        // do nothing
-                    }
-                }
-                // add to missing headers
-                missing_headers.insert(hdr.hash(), hdr);
+            //     let hdr = block_archive.block_header(&block_hash).await.unwrap();
+            //     // insert into parent_hashes index - there can be multiple blocks with the same parent
+            //     match parent_hashes.get(&hdr.prev_hash) {
+            //         None => {
+            //             parent_hashes.insert(hdr.prev_hash, vec![hdr.hash()]);
+            //         },
+            //         Some(v) => {
+            //             let mut v2 = v.clone();
+            //             v2.push(hdr.hash());
+            //             parent_hashes.insert(hdr.prev_hash, v2);
+            //         }
+            //     }
+            //     // check if we know the parent
+            //     match chain_store.get_block_info_by_hash(&hdr.prev_hash).await? {
+            //         Some(p_info) => {
+            //             known_parents.insert(p_info.hash);
+            //         },
+            //         None => {
+            //             // do nothing
+            //         }
+            //     }
+            //     // add to missing headers
+            //     missing_headers.insert(hdr.hash(), hdr);
             }
         }
         checked += 1;
@@ -175,42 +180,42 @@ pub async fn sync2(config: &BSVDBConfig) -> CliResult<()> {
             println!("checked {} blocks, {} blocks/sec", checked, (checked as f32)/dur.as_secs_f32());
         }
     }
-    println!("checked {} blocks, found {} blocks, missing {} blocks, analyzing...", checked, num_found, missing_headers.len());
+    println!("checked {} blocks, found {} blocks, analyzing...", checked, num_found);
 
-    let mut added = 0;
-    while known_parents.len() > 0 {
-        let p_hash = known_parents.pop_first();
-        if let Some(c_hashes) = parent_hashes.get(&p_hash.unwrap()) {
-            for c_hash in c_hashes {
-                let hdr = missing_headers.get(c_hash).unwrap();
-                let b_info = BlockInfo {
-                    id: 0,
-                    hash: hdr.hash(),
-                    header: hdr.clone(),
-                    height: 0,
-                    prev_id: 0,
-                    next_ids: vec![],
-                    size: None,
-                    num_tx: None,
-                    median_time: None,
-                    chain_work: None,
-                    total_tx: None,
-                    total_size: None,
-                    miner: None,
-                    validity: BlockValidity::Unknown,
-                };
-                let b_info = chain_store.store_block_info(b_info).await.unwrap();
-                // this can now be a known parent
-                known_parents.insert(b_info.hash);
-                added += 1;
-                if added % 10_000 == 0 {
-                    println!("added {} blocks.", added);
-                }
-            }
-            parent_hashes.remove(&p_hash.unwrap());
-        }
-    }
-    println!("finished sync. added {} blocks.", added);
+    // let mut added = 0;
+    // while known_parents.len() > 0 {
+    //     let p_hash = known_parents.pop_first();
+    //     if let Some(c_hashes) = parent_hashes.get(&p_hash.unwrap()) {
+    //         for c_hash in c_hashes {
+    //             let hdr = missing_headers.get(c_hash).unwrap();
+    //             let b_info = BlockInfo {
+    //                 id: 0,
+    //                 hash: hdr.hash(),
+    //                 header: hdr.clone(),
+    //                 height: 0,
+    //                 prev_id: 0,
+    //                 next_ids: vec![],
+    //                 size: None,
+    //                 num_tx: None,
+    //                 median_time: None,
+    //                 chain_work: None,
+    //                 total_tx: None,
+    //                 total_size: None,
+    //                 miner: None,
+    //                 validity: BlockValidity::Unknown,
+    //             };
+    //             let b_info = chain_store.store_block_info(b_info).await.unwrap();
+    //             // this can now be a known parent
+    //             known_parents.insert(b_info.hash);
+    //             added += 1;
+    //             if added % 10_000 == 0 {
+    //                 println!("added {} blocks.", added);
+    //             }
+    //         }
+    //         parent_hashes.remove(&p_hash.unwrap());
+    //     }
+    // }
+    // println!("finished sync. added {} blocks.", added);
 
     drop(fdb_boot);
     Ok(())
