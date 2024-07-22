@@ -1,4 +1,3 @@
-use std::ptr::hash;
 use bitcoinsv::bitcoin::{BlockchainId, BlockHash, BlockHeader};
 use foundationdb;
 use foundationdb::directory::Directory;

@@ -1,7 +1,6 @@
 use std::borrow::Cow;
 use std::future::Future;
 use std::pin::Pin;
-use std::process::id;
 use std::sync::Arc;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::sync::oneshot::channel as oneshot_channel;
