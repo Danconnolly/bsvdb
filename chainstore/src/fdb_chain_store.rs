@@ -13,6 +13,7 @@ use foundationdb::directory::{Directory, DirectoryOutput};
 use foundationdb::Transaction;
 use foundationdb::tuple::{Bytes, Element, pack, unpack};
 use futures::FutureExt;
+use tokio::sync::oneshot::error::RecvError;
 use tokio::task::JoinHandle;
 use bsvdb_base::ChainStoreConfig;
 use crate::chain_store::ChainState;
@@ -45,6 +46,18 @@ impl FDBChainStore {
             sender: tx,
         }, j))
     }
+
+    /// Shutdown the FDBChainStore, cleaning up and terminating background processes.
+    pub async fn shutdown(&self) -> ChainStoreResult<()> {
+        let (tx, rx) = oneshot_channel();
+        self.sender.send((FDBChainStoreMessage::Shutdown, tx)).await.map_err(|e| {
+            ChainStoreError::SendError(format!("{}", e))
+        })?;
+        match rx.await {
+            Ok(_) => Ok(()),
+            Err(e) => Err(ChainStoreError::from(e)),
+        }
+    }
 }
 
 #[async_trait]
@@ -62,6 +75,7 @@ impl ChainStore for FDBChainStore {
             })?;
             match rx.await {
                 Ok(FDBChainStoreReply::BlockInfoReply(r)) => Ok(r),
+                Ok(_) => Err(ChainStoreError::Internal("received unexpected reply".into())),
                 Err(e) => Err(ChainStoreError::from(e))
             }
         })
@@ -96,11 +110,13 @@ enum FDBChainStoreMessage {
     BlockInfoByHash(BlockHash),
     // BlockInfos(BlockId, Option<u64>),
     // StoreBlockInfo(BlockInfo),
+    Shutdown,
 }
 
 #[derive(Debug)]
 enum FDBChainStoreReply {
     BlockInfoReply(Option<BlockInfo>),
+    Done,
 }
 
 // the chain store agent
@@ -447,6 +463,10 @@ impl FDBChainStoreActor {
                         },
                         // FDBChainStoreMessage::BlockInfos(a, b) => None,
                         // FDBChainStoreMessage::StoreBlockInfo(a) => None,
+                        FDBChainStoreMessage::Shutdown => {
+                            reply.send(FDBChainStoreReply::Done).expect("unexpected failure shutting down");
+                            break;
+                        }
                     };
                 }
             }

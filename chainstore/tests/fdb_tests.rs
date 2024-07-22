@@ -1,5 +1,6 @@
 use bitcoinsv::bitcoin::{BlockchainId, BlockHeader};
 use foundationdb;
+use foundationdb::directory::Directory;
 use bsvdb_chainstore::{ChainStore, FDBChainStore};
 use rand::random;
 use bsvdb_base::ChainStoreConfig;
@@ -21,6 +22,16 @@ async fn run_fdb_tests() {
     check_clone_store(&chain_store).await;
     check_multi_spawn(&chain_store).await;
     check_store(&chain_store).await;
+
+    chain_store.shutdown().await.expect("failed shutting down");
+    j.await.expect("failed waiting for task to terminate.");
+
+    let db = foundationdb::Database::default().expect("failed opening db for cleanup");
+    let root_dir: Vec<String> = config.root_path.split('/').map(|i| String::from(i)).collect();
+    let tx = db.create_trx().expect("failed creating transaction");
+    let d = foundationdb::directory::DirectoryLayer::default();
+    d.remove(&tx, &root_dir).await.expect("error removing test directory");
+    tx.commit().await.expect("failed committing transaction");
 
     drop(network);
 }
