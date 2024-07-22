@@ -1,6 +1,5 @@
 use foundationdb::directory::DirectoryError;
 use foundationdb::{FdbError, TransactionCommitError};
-use tokio::sync::mpsc::error::SendError;
 use tokio::sync::oneshot::error::RecvError;
 
 /// Standard Result used in the library
@@ -17,8 +16,8 @@ pub enum ChainStoreError {
     ParentNotFound,
     /// The method can not be implemented.
     CantImplement,
-    /// error sending data
-    SendError,
+    /// error sending data through a channel
+    SendError(String),
     /// miscellaneous error
     Misc(String),
     IoError(std::io::Error),
@@ -36,7 +35,7 @@ impl std::fmt::Display for ChainStoreError {
             ChainStoreError::BlockExists => write!(f, "Block exists"),
             ChainStoreError::ParentNotFound => write!(f, "Parent not found"),
             ChainStoreError::CantImplement => write!(f, "Can't implement"),
-            ChainStoreError::SendError => write!(f, "send error"),
+            ChainStoreError::SendError(s) => write!(f, "error sending data through channel: {}", s),
             ChainStoreError::Misc(err) => write!(f, "misc error {}", err),
             ChainStoreError::IoError(err) => write!(f, "IO error: {}", err),
             ChainStoreError::BitcoinSVError(err) => write!(f, "Bitcoin SV error: {}", err),

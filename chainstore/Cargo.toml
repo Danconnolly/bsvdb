@@ -24,10 +24,3 @@ rand = "0.8.5"
 
 bitcoinsv = "0.2.6"
 bsvdb-base = { path = "../base" }
-
-[dev-dependencies]
-criterion = "0.5.1"
-
-[[bench]]
-name = "get_block_info"
-harness = false

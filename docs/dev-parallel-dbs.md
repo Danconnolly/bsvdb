@@ -41,7 +41,8 @@ multi-processing.
 
 ## Executing many queries simultaneously
 
-The next element is to be able to execute many queries at once from a single task. We need to be able to write something like this:
+The next element is to be able to execute many queries at once from a single task. We need to be able to write something 
+like this:
 ```
     let db = FDBChainStore::new();
     ...
@@ -67,3 +68,20 @@ In order to be able to compile the first loop (the for loop), the future that is
 be completely disassociated with the `db` struct. If it retains a reference to the `db` struct then the following iterations of 
 the for loop will not be able to also obtain a reference. So, the `get_data` method has to return a closure that does not
 reference the `db` struct. See for example FDBChainStore::get_block_info().
+
+We could use a function which meets this definition: 
+```
+async fn get_block_info(&self, db_id: BlockId) -> ChainStoreResult<JoinHandle<ChainStoreResult<Option<BlockInfo>>>>;
+```
+This is an async function, so it returns a future that resolves to a JoinHandle (wrapped in result) to another task which 
+can be waited on. This would work but it means that if we always have to wait on the async function first and then wait 
+on the task using the JoinHandle. This is overkill for a small simple use-case.
+
+This definition is more complex but much nicer:
+```
+fn get_block_info(&self, db_id: BlockId) -> impl Future<Output=ChainStoreResult<Option<BlockInfo>>> + Send;
+```
+Its not an async function, but it returns a future that is Send. So in a simple use-case we can just await on the
+result just like an async function, or we create a task to resolve the future in the background. I havent been able 
+to achieve the same effect using an async function because the future returned by the async function keeps a 
+reference to the implementing struct, making its use in a loop as described above impossible.
