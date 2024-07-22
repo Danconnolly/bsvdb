@@ -1,6 +1,8 @@
 use std::borrow::Cow;
 use std::future::Future;
 use std::pin::Pin;
+use std::process::id;
+use std::sync::Arc;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::sync::oneshot::channel as oneshot_channel;
 use tokio::sync::oneshot::Sender as OneshotSender;
@@ -166,7 +168,7 @@ struct FDBChainStoreActor {
     // hash index directory
     h_index_dir: DirectoryOutput,
     // next_id with lock
-    next_id_lock: Mutex<u8>,
+    next_id_lock: Arc<Mutex<u8>>,
 }
 
 impl FDBChainStoreActor {
@@ -204,7 +206,7 @@ impl FDBChainStoreActor {
         trx.commit().await?;
         Self::ensure_db_initialized(&db, &chain_dir, infos_dir.clone(), &h_index_dir, chain).await?;
         Ok(FDBChainStoreActor {
-            receiver, db, chain_dir, infos_dir, h_index_dir, next_id_lock: Mutex::new(5),
+            receiver, db, chain_dir, infos_dir, h_index_dir, next_id_lock: Arc::new(Mutex::new(0)),
         })
     }
 
@@ -359,16 +361,14 @@ impl FDBChainStoreActor {
         Ok(Some(i))
     }
 
-    async fn get_next_id(&self) -> ChainStoreResult<<FDBChainStore as ChainStore>::BlockId> {
+    async fn get_next_id(trx: &Transaction, next_id: &Mutex<u8>, chain_dir: &DirectoryOutput) -> ChainStoreResult<<FDBChainStore as ChainStore>::BlockId> {
         // only do one of these at a time to prevent db transaction clashes
-        let _lck = self.next_id_lock.lock().await;
-        let trx = self.db.create_trx().unwrap();
-        let k = Self::get_next_id_key(&self.chain_dir).unwrap();
+        let k = Self::get_next_id_key(chain_dir).unwrap();
+        let _lck = next_id.lock().await;
         let v= trx.get(&*k, false).await.unwrap().unwrap();
         let id = Self::decode_next_id(&v.to_vec());
         let v2 = Self::encode_next_id(id+1);
         trx.set(&*k, &*v2);
-        trx.commit().await.unwrap();
         Ok(id)
     }
 
@@ -394,24 +394,29 @@ impl FDBChainStoreActor {
         }))
     }
 
-    async fn get_block_info_by_hash(&mut self, hash: BlockHash, reply: OneshotSender<FDBChainStoreReply>) -> ChainStoreResult<JoinHandle<()>> {
+    async fn sub_block_info_by_hash(trx: &Transaction, hash: &BlockHash, h_index_dir: &DirectoryOutput, infos_dir: &DirectoryOutput) -> ChainStoreResult<Option<BlockInfo<<FDBChainStore as ChainStore>::BlockId>>> {
+        match Self::get_block_id_from_hash(trx, hash, h_index_dir).await? {
+            None => {
+                Ok(None)
+            },
+            Some(id) => {
+                let k = Self::get_block_info_key(infos_dir, id)?;
+                let r = trx.get(k.as_slice(), false).await.unwrap();
+                match r {
+                    Some(i) => Ok(Some(Self::decode_block_info(&i.to_vec()))),
+                    None => Ok(None),
+                }
+            }
+        }
+    }
+
+    async fn get_block_info_by_hash(&self, hash: BlockHash, reply: OneshotSender<FDBChainStoreReply>) -> ChainStoreResult<JoinHandle<()>> {
         let trx = self.db.create_trx()?;
         let h_index_dir = self.h_index_dir.clone();
         let infos_dir = self.infos_dir.clone();
         Ok(tokio::spawn(async move {
-            match Self::get_block_id_from_hash(&trx, &hash, &h_index_dir).await.expect("get_block_id_from_hash() failed in get_block_info_by_hash()") {
-                None => {
-                    reply.send(FDBChainStoreReply::BlockInfoReply(None)).expect("send of None reply failed in get_block_info_by_hash()");
-                },
-                Some(id) => {
-                    let k = Self::get_block_info_key(&infos_dir, id).expect("get_block_info_key() failed in get_block_info_by_hash()");
-                    let r = trx.get(k.as_slice(), false).await.unwrap();
-                    reply.send(FDBChainStoreReply::BlockInfoReply(match r {
-                        Some(i) => Some(Self::decode_block_info(&i.to_vec())),
-                        None => None,
-                    })).expect("send of reply failed in get_block_info_by_hash()");
-                }
-            }
+            let r = Self::sub_block_info_by_hash(&trx, &hash, &h_index_dir, &infos_dir).await.expect("failure during get block info by hash()");
+            reply.send(FDBChainStoreReply::BlockInfoReply(r)).expect("failed to send reply");
         }))
     }
 
@@ -419,67 +424,72 @@ impl FDBChainStoreActor {
     //     todo!()
     // }
 
-    // async fn store_block_info(&mut self, block_info: BlockInfo) -> ChainStoreResult<BlockInfo> {
-    //     let mut result = block_info.clone();
-    //     match self.get_block_id_from_hash(&result.hash).await? {
-    //         None => {
-    //             let id = self.get_next_id().await?;
-    //             let k = Self::get_h_index_key(&self.h_index_dir, &result.hash).unwrap();
-    //             let v = Self::encode_h_index(id);
-    //             let trx = self.db.create_trx().unwrap();
-    //             trx.set(&*k, &*v);
-    //             trx.commit().await?;
-    //             result.id = id;
-    //         },
-    //         Some(id) => {
-    //             result.id = id;
-    //         }
-    //     }
-    //     let parent = self.get_block_info_by_hash(&result.header.prev_hash).await?;
-    //     if parent.is_none() {
-    //         return Err(ChainStoreError::ParentNotFound)
-    //     }
-    //     let mut parent = parent.unwrap();
-    //     let trx = self.db.create_trx().unwrap();    // start the update transaction
-    //     // check that the child is listed in the parents next_ids
-    //     if ! parent.next_ids.contains(&result.id) {
-    //         // update the next_ids in the parent and save it
-    //         parent.next_ids.push(result.id);
-    //         let k = Self::get_block_info_key(&self.infos_dir, parent.id).unwrap();
-    //         let v = Self::encode_block_info(&parent);
-    //         trx.set(&*k, &*v);
-    //     }
-    //     // update total_size & total_tx if possible
-    //     if parent.total_size.is_some() && result.size.is_some() {
-    //         result.total_size = Some(parent.total_size.unwrap() + result.size.unwrap())
-    //     }
-    //     if parent.total_tx.is_some() && result.num_tx.is_some() {
-    //         result.total_tx = Some(parent.total_tx.unwrap() + result.num_tx.unwrap())
-    //     }
-    //     // update height, prev_id, and validity
-    //     result.height = parent.height + 1;
-    //     result.prev_id = parent.id;
-    //     result.validity = match parent.validity {
-    //         BlockValidity::Unknown => BlockValidity::Unknown,
-    //         BlockValidity::Valid => result.validity,
-    //         BlockValidity::ValidHeader => {
-    //             if result.validity == BlockValidity::Valid {
-    //                 BlockValidity::ValidHeader
-    //             } else {
-    //                 result.validity
-    //             }
-    //         },
-    //         BlockValidity::Invalid => BlockValidity::InvalidAncestor,
-    //         BlockValidity::HeaderInvalid => BlockValidity::InvalidAncestor,
-    //         BlockValidity::InvalidAncestor => BlockValidity::InvalidAncestor,
-    //     };
-    //     // save the block info
-    //     let k = Self::get_block_info_key(&self.infos_dir, result.id).unwrap();
-    //     let v = Self::encode_block_info(&result);
-    //     trx.set(&*k, &*v);
-    //     trx.commit().await?;
-    //     Ok(result)
-    // }
+    async fn store_block_info(&self, mut block_info: BlockInfo<<FDBChainStore as ChainStore>::BlockId>, reply: OneshotSender<FDBChainStoreReply>) ->
+                                                                                                        ChainStoreResult<JoinHandle<()>> {
+        let trx = self.db.create_trx()?;
+        let h_index_dir = self.h_index_dir.clone();
+        let chain_dir = self.chain_dir.clone();
+        let infos_dir = self.infos_dir.clone();
+        let next_id_lck = self.next_id_lock.clone();
+        Ok(tokio::spawn(async move {
+            match Self::get_block_id_from_hash(&trx, &block_info.hash, &h_index_dir).await.expect("couldnt get block id from hash") {
+                None => {
+                    let id = Self::get_next_id(&trx, &next_id_lck, &chain_dir).await.expect("couldnt get next_id");
+                    let k = Self::get_h_index_key(&h_index_dir, &block_info.hash).unwrap();
+                    let v = Self::encode_h_index(id);
+                    trx.set(&*k, &*v);
+                    block_info.id = id;
+                },
+                Some(id) => {
+                    block_info.id = id;
+                }
+            }
+            let parent = Self::sub_block_info_by_hash(&trx, &block_info.header.prev_hash, &h_index_dir, &infos_dir ).await.expect("failed to get parent by hash");
+            if parent.is_none() {
+                panic!("parent not found");
+                // return Err(ChainStoreError::ParentNotFound)
+            }
+            let mut parent = parent.unwrap();
+            // check that the child is listed in the parents next_ids
+            if ! parent.next_ids.contains(&block_info.id) {
+                // update the next_ids in the parent and save it
+                parent.next_ids.push(block_info.id);
+                let k = Self::get_block_info_key(&infos_dir, parent.id).unwrap();
+                let v = Self::encode_block_info(&parent);
+                trx.set(&*k, &*v);
+            }
+            // update total_size & total_tx if possible
+            if parent.total_size.is_some() && block_info.size.is_some() {
+                block_info.total_size = Some(parent.total_size.unwrap() + block_info.size.unwrap())
+            }
+            if parent.total_tx.is_some() && block_info.num_tx.is_some() {
+                block_info.total_tx = Some(parent.total_tx.unwrap() + block_info.num_tx.unwrap())
+            }
+            // update height, prev_id, and validity
+            block_info.height = parent.height + 1;
+            block_info.prev_id = parent.id;
+            block_info.validity = match parent.validity {
+                BlockValidity::Unknown => BlockValidity::Unknown,
+                BlockValidity::Valid => block_info.validity,
+                BlockValidity::ValidHeader => {
+                    if block_info.validity == BlockValidity::Valid {
+                        BlockValidity::ValidHeader
+                    } else {
+                        block_info.validity
+                    }
+                },
+                BlockValidity::Invalid => BlockValidity::InvalidAncestor,
+                BlockValidity::HeaderInvalid => BlockValidity::InvalidAncestor,
+                BlockValidity::InvalidAncestor => BlockValidity::InvalidAncestor,
+            };
+            // save the block info
+            let k = Self::get_block_info_key(&infos_dir, block_info.id).unwrap();
+            let v = Self::encode_block_info(&block_info);
+            trx.set(&*k, &*v);
+            trx.commit().await.expect("couldnt commit transaction");
+            reply.send(FDBChainStoreReply::BlockInfoReply(Option::from(block_info))).expect("send of reply failed in store_block_info()");
+        }))
+    }
 
     // main actor thread
     async fn run(&mut self) -> () {
@@ -501,7 +511,10 @@ impl FDBChainStoreActor {
                             tasks.push(j);
                         },
                         FDBChainStoreMessage::BlockInfos(a, b) => {}, // todo
-                        FDBChainStoreMessage::StoreBlockInfo(a) => {}, // todo
+                        FDBChainStoreMessage::StoreBlockInfo(a) => {
+                            let j = self.store_block_info(a, reply).await.unwrap();
+                            tasks.push(j);
+                        },
                         FDBChainStoreMessage::Shutdown => {
                             reply.send(FDBChainStoreReply::Done).expect("unexpected failure shutting down");
                             break;
