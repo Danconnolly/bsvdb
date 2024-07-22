@@ -41,6 +41,7 @@ pub trait ChainStore {
     ///
     /// Return at most max_blocks block infos, if given, otherwise return all block infos to the
     /// genesis block.
+    /// todo: convert to stream
     fn get_block_infos(&self, db_id: Self::BlockId, max_blocks: Option<u64>) -> impl Future<Output=ChainStoreResult<Vec<BlockInfo<Self::BlockId>>>> + Send;
 
     /// Store the block info in the ChainStore, returning an updated BlockInfo structure.
