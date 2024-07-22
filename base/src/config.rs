@@ -4,21 +4,21 @@ use config::{Config, File, FileFormat};
 use serde::Deserialize;
 use crate::result::{BsvDbBaseError, BsvDbBaseResult};
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[allow(unused)]
 pub struct BlockArchiveConfig {
     pub enabled: bool,
     pub root_path: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[allow(unused)]
 pub struct ChainStoreConfig {
     pub enabled: bool,
     pub root_path: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[allow(unused)]
 pub struct BSVDBConfig {
     pub verbose: bool,
