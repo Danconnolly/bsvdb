@@ -1,9 +1,7 @@
 use std::future::Future;
 use async_trait::async_trait;
 use bitcoinsv::bitcoin::{BlockchainId, BlockHash, BlockHeader};
-use tokio::io::Join;
-use tokio::task::JoinHandle;
-use crate::{ChainStoreError, ChainStoreResult};
+use crate::ChainStoreResult;
 
 /// A ChainStore stores information about a blockchain.
 ///
