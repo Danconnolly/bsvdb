@@ -16,7 +16,7 @@ async fn run_fdb_tests() {
         enabled: true,
         root_path: root,
     };
-    let (mut chain_store, mut j) = FDBChainStore::new(&config, BlockchainId::Mainnet).await.unwrap();
+    let (chain_store, j) = FDBChainStore::new(&config, BlockchainId::Mainnet).await.unwrap();
 
     check_clone_store(&chain_store).await;
     check_multi_spawn(&chain_store).await;
@@ -26,7 +26,7 @@ async fn run_fdb_tests() {
 }
 
 /// Check that we can clone the chainstore into a separate task
-async fn check_clone_store(mut chain_store: &FDBChainStore) {
+async fn check_clone_store(chain_store: &FDBChainStore) {
 
     let c2 = chain_store.clone();
     let j = tokio::spawn(async move {
@@ -39,7 +39,7 @@ async fn check_clone_store(mut chain_store: &FDBChainStore) {
 }
 
 /// Check that we can spawn multiple instances of queries running simultaneously
-async fn check_multi_spawn(mut chain_store: &FDBChainStore) {
+async fn check_multi_spawn(chain_store: &FDBChainStore) {
     // can we do lots of reads at once?
     let mut v = vec![];
     for i in 0..9 {
@@ -56,7 +56,7 @@ async fn check_multi_spawn(mut chain_store: &FDBChainStore) {
     }
 }
 
-async fn check_store(mut chain_store: &FDBChainStore) {
+async fn check_store(chain_store: &FDBChainStore) {
     // get genesis block by id
     let g_block = chain_store.get_block_info(0).await.unwrap();
     assert!(g_block.is_some());

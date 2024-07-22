@@ -1,9 +1,7 @@
 use std::borrow::Cow;
 use std::collections::BTreeMap;
-use std::fmt::format;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::sync::oneshot::channel as oneshot_channel;
 use tokio::sync::oneshot::Sender as OneshotSender;
@@ -12,12 +10,9 @@ use tokio::sync::RwLock;
 use async_trait::async_trait;
 use bitcoinsv::bitcoin::{BlockchainId, BlockHash, BlockHeader, Encodable};
 use foundationdb::directory::{Directory, DirectoryOutput};
-use foundationdb::future::FdbSlice;
-use foundationdb::{FdbBindingError, RetryableTransaction, Transaction};
+use foundationdb::Transaction;
 use foundationdb::tuple::{Bytes, Element, pack, unpack};
-use futures::future::BoxFuture;
 use futures::FutureExt;
-use log::info;
 use tokio::task::JoinHandle;
 use bsvdb_base::ChainStoreConfig;
 use crate::chain_store::ChainState;
@@ -467,7 +462,7 @@ impl FDBChainStoreActor {
 
 #[cfg(test)]
 mod tests {
-    use hex::FromHex;
+    
     use super::*;
 
     #[test]
