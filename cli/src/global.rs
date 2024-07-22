@@ -1,16 +1,18 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
+use std::hash::Hash;
 use std::pin::Pin;
+use std::process::{id, Output};
 use std::time::Instant;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
-use bitcoinsv::bitcoin::{BlockHash, BlockHeader};
+use bitcoinsv::bitcoin::{BlockHash, BlockHeader, FullBlockStream};
 use futures::StreamExt;
 use bsvdb_base::BSVDBConfig;
 use crate::result::CliResult;
 use bsvdb_blockarchive::{BlockArchive, SimpleFileBasedBlockArchive};
 use bsvdb_chainstore::{BlockInfo, BlockValidity, ChainStore, FDBChainStore};
 use bsvdb_chainstore::ChainStoreResult;
-
+use crate::ba::header;
 
 // synchronize chainstore from blockstore, multi-threaded approach
 pub async fn sync_piped(config: &BSVDBConfig) -> CliResult<()> {
@@ -27,12 +29,17 @@ pub async fn sync_piped(config: &BSVDBConfig) -> CliResult<()> {
     //      send future to next stage
     // 2 - incoming is futures of check for block in chain store
     //      if the block is in chain store then abandon
-    //      if the block is not in the chain store then spawn a task to fetch the header and send to next stage
-    // 3 - incoming is future of fetching the header for unknown block
+    //      if the block is not in the chain store then
+    //          spawn a task to spool the block, collecting the header and the number of transactions and send to next stage
+    // 3 - incoming is future of fetching the header & the number of tx for unknown block
+    //      create a BlockInfo and add the header and number of tx
+    //      spawn a task to get the block size and send the task and the blockinfo to the next stage
+    // 4 - incoming is a future for getting the block size and the partial block info
+    //      update the partial block info with the file size
     //      spawn a task to check if the parent is in the chainstore
-    //      send future to next stage
-    // 4 - collect all inputs - (header, joinhandle of check for parent)
-    //      build map of hash -> header, parent hash -> child hashes, known_parent set
+    //      send future to next stage with the partial block info
+    // 5 - collect all inputs - (block info, joinhandle of check for parent)
+    //      build map of hash -> block info, parent hash -> child hashes, known_parent set
     //      until pipeline done
     //      return maps & set
     //
@@ -57,59 +64,88 @@ pub async fn sync_piped(config: &BSVDBConfig) -> CliResult<()> {
         Ok(())
     }
 
-    type Stage2Result = BlockHeader;
-    pub async fn stage2(mut receiver: Receiver<Stage1Result>, config: BSVDBConfig,
+    type Stage2Result = BlockInfo<<FDBChainStore as ChainStore>::BlockId>;
+    async fn stage2(mut receiver: Receiver<Stage1Result>, config: BSVDBConfig,
                         sender: Sender<Stage2Result>) -> CliResult<()> {
+        // unfortunately we cant send futures for retrieving block data at the moment, so we have to do it in the foreground here
         let mut block_archive = SimpleFileBasedBlockArchive::new(&config.block_archive).await?;
-        while let Some((j, h)) = receiver.recv().await {
+        while let Some((j, block_hash)) = receiver.recv().await {
             let r = j.await.unwrap();
             if r.is_none() {
-                let f = block_archive.block_header(&h).await.unwrap();
-                sender.send(f).await.expect("sending failed in stage2");
+                let r = block_archive.get_block(&block_hash).await.expect("get_block failed in stage2");
+                let it = FullBlockStream::new(r).await.expect("couldnt get block stream");
+                let b_info = BlockInfo {
+                    id: 0u64,
+                    hash: it.block_header.hash(),
+                    header: it.block_header,
+                    height: 0,
+                    prev_id: 0u64,
+                    next_ids: vec![],
+                    size: None,
+                    num_tx: Some(it.num_tx),
+                    median_time: None,
+                    chain_work: None,
+                    total_tx: None,
+                    total_size: None,
+                    miner: None,
+                    validity: BlockValidity::Unknown,
+                };
+                sender.send(b_info).await.expect("sending failed in stage2");
             }
         }
         Ok(())
     }
 
-    type Stage3Result = (BlockHeader,Pin<Box<dyn Future<Output=ChainStoreResult<std::option::Option<BlockInfo<<FDBChainStore as ChainStore>::BlockId>>>> + Send>>);
-    async fn stage3(mut receiver: Receiver<Stage2Result>, chain_store: FDBChainStore, sender: Sender<Stage3Result>) -> CliResult<()> {
-        while let Some(r) = receiver.recv().await {
-            let f = chain_store.get_block_info_by_hash(r.prev_hash);
-            sender.send((r, f)).await.expect("sending failed in stage3");
+    type Stage3Result = BlockInfo<<FDBChainStore as ChainStore>::BlockId>;
+    async fn stage3(mut receiver: Receiver<Stage2Result>, config: BSVDBConfig, sender: Sender<Stage3Result>) -> CliResult<()> {
+        let mut block_archive = SimpleFileBasedBlockArchive::new(&config.block_archive).await?;
+        while let Some(mut r) = receiver.recv().await {
+            let sz = block_archive.block_size(&r.hash).await.expect("get block size failed in stage3");
+            r.size = Some(sz as u64);
+            sender.send(r).await.expect("msg sending failed in stage3");
         }
         Ok(())
     }
 
-    type Stage4Result = (BTreeMap<BlockHash, BlockHeader>, BTreeMap<BlockHash, Vec<BlockHash>>, BTreeSet<BlockHash>);
-    async fn stage4(mut receiver: Receiver<Stage3Result>) -> CliResult<Stage4Result> {
-        let mut headers = BTreeMap::new();
+    type Stage4Result = (BlockInfo<<FDBChainStore as ChainStore>::BlockId>, Pin<Box<dyn Future<Output=ChainStoreResult<std::option::Option<BlockInfo<<FDBChainStore as ChainStore>::BlockId>>>> + Send>>);
+    async fn stage4(mut receiver: Receiver<Stage3Result>, chain_store: FDBChainStore, sender: Sender<Stage4Result>) -> CliResult<()> {
+        while let Some(r) = receiver.recv().await {
+            let f = chain_store.get_block_info_by_hash(r.header.prev_hash);
+            sender.send((r, f)).await.expect("sending failed in stage4");
+        }
+        Ok(())
+    }
+
+    type Stage5Result = (BTreeMap<BlockHash, BlockInfo<<FDBChainStore as ChainStore>::BlockId>>, BTreeMap<BlockHash, Vec<BlockHash>>, BTreeSet<BlockHash>);
+    async fn stage5(mut receiver: Receiver<Stage4Result>) -> CliResult<Stage5Result> {
+        let mut b_infos = BTreeMap::new();
         let mut parents_children = BTreeMap::new();
         let mut known_parents = BTreeSet::new();
         let start_time = Instant::now();
         let mut found = 0;
-        while let Some((hdr, j)) = receiver.recv().await {
+        while let Some((b_info, j)) = receiver.recv().await {
             let r = j.await.unwrap();
             if r.is_some() {
                 known_parents.insert(r.unwrap().hash);
             }
-            match parents_children.get(&hdr.prev_hash) {
+            match parents_children.get(&b_info.header.prev_hash) {
                 None => {
-                    parents_children.insert(hdr.prev_hash, vec![hdr.hash()]);
+                    parents_children.insert(b_info.header.prev_hash, vec![b_info.hash]);
                 },
                 Some(v) => {
                     let mut v2 = v.clone();
-                    v2.push(hdr.hash());
-                    parents_children.insert(hdr.prev_hash, v2);
+                    v2.push(b_info.hash);
+                    parents_children.insert(b_info.header.prev_hash, v2);
                 }
             }
-            headers.insert(hdr.hash(), hdr);
+            b_infos.insert(b_info.hash, b_info);
             found += 1;
             if found % 10_000 == 0 {
                 let dur = start_time.elapsed();
                 println!("found {} blocks, {} blocks/sec", found, (found as f32)/dur.as_secs_f32());
             }
         }
-        Ok((headers, parents_children, known_parents))
+        Ok((b_infos, parents_children, known_parents))
     }
 
     config.check_block_archive_enabled()?;
@@ -137,41 +173,31 @@ pub async fn sync_piped(config: &BSVDBConfig) -> CliResult<()> {
     let j_stage2 = tokio::spawn(f_stage2);
 
     let (s3, r3) = channel(BUFFER_SIZE);
-    let f_stage3 = stage3(r2, chain_store.clone(), s3);
+    let f_stage3 = stage3(r2, (*config).clone(), s3);
     let j_stage3 = tokio::spawn(f_stage3);
 
-    let f_stage4 = stage4(r3);
-    let j_stag4 = tokio::spawn(f_stage4);
+    let (s4, r4) = channel(BUFFER_SIZE);
+    let f_stage4 = stage4(r3, chain_store.clone(), s4);
+    let j_stage4 = tokio::spawn(f_stage4);
+
+    let f_stage5 = stage5(r4);
+    let j_stage5 = tokio::spawn(f_stage5);
 
     j_stage1.await?;
     j_stage2.await?;
     j_stage3.await?;
-    let (mut headers, mut parent_children, mut known_parents) = j_stag4.await?.unwrap();
-    println!("found {} new headers, with {} known parents", headers.len(), known_parents.len());
+    j_stage4.await?;
+
+    let (mut block_infos, mut parent_children, mut known_parents) = j_stage5.await?.unwrap();
+    println!("found {} new headers, with {} known parents", block_infos.len(), known_parents.len());
 
     let mut added = 0;
     while known_parents.len() > 0 {
         let p_hash = known_parents.pop_first().unwrap();
         if let Some(c_hashes) = parent_children.get(&p_hash) {
             for c_hash in c_hashes {
-                let hdr = headers.get(c_hash).unwrap();
-                let b_info = BlockInfo {
-                    id: 0,
-                    hash: hdr.hash(),
-                    header: hdr.clone(),
-                    height: 0,
-                    prev_id: 0,
-                    next_ids: vec![],
-                    size: None,
-                    num_tx: None,
-                    median_time: None,
-                    chain_work: None,
-                    total_tx: None,
-                    total_size: None,
-                    miner: None,
-                    validity: BlockValidity::Unknown,
-                };
-                let b_info = chain_store.store_block_info(b_info).await.unwrap();
+                let b_info = block_infos.get(c_hash).unwrap();
+                let b_info = chain_store.store_block_info(b_info.clone()).await.unwrap();
                 // this can now be a known parent
                 known_parents.insert(b_info.hash);
                 added += 1;
