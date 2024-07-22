@@ -1,3 +1,4 @@
+use std::ptr::hash;
 use bitcoinsv::bitcoin::{BlockchainId, BlockHeader};
 use foundationdb;
 use foundationdb::directory::Directory;
@@ -81,8 +82,8 @@ async fn check_store(chain_store: &FDBChainStore) {
     assert_eq!(g_block.size, Some(285));
 
     // get genesis block by hash
-    // let g_block2 = chain_store.get_block_info_by_hash(&BlockHeader::get_genesis(BlockchainId::Mainnet).hash()).await.unwrap().unwrap();
-    // assert_eq!(g_block2.height, 0);
+    let g_block2 = chain_store.get_block_info_by_hash(BlockHeader::get_genesis(BlockchainId::Mainnet).hash()).await.unwrap().unwrap();
+    assert_eq!(g_block2.height, 0);
 
     // let hdr1 = BlockHeader::from_hex("010000006fe28c0ab6f1b372c1a6a246ae63f74f931e8365e15a089c68d6190000000000982051fd1e4ba744bbbe680e1fee14677ba1a3c3540bf7b1cdb606e857233e0e61bc6649ffff001d01e36299").unwrap();
     // let info1 = BlockInfo {
