@@ -4,14 +4,19 @@ use foundationdb::directory::Directory;
 use hex::FromHex;
 use bsvdb_chainstore::{BlockInfo, BlockValidity, ChainStore, FDBChainStore};
 use rand::random;
+use bsvdb_base::ChainStoreConfig;
 
 #[tokio::test]
 async fn check_store() {
     let network = unsafe { foundationdb::boot() };
     // get a unique root
     let r_id: u16 = random();
-    let root = vec![format!("testing{}", r_id)];
-    let mut chain_store = FDBChainStore::new(root.clone(), BlockchainId::Mainnet).await.unwrap();
+    let root = format!("testing{}", r_id);
+    let config = ChainStoreConfig {
+        enabled: true,
+        root_path: root,,
+    }
+    let mut chain_store = FDBChainStore::new(&config, BlockchainId::Mainnet).await.unwrap();
 
     // get genesis block by id
     let g_block = chain_store.get_block_info(&0).await.unwrap();
