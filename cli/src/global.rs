@@ -1,14 +1,15 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::future::Future;
+use std::io::Chain;
 use std::pin::Pin;
+use std::process::Output;
 use std::time::Instant;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use bitcoinsv::bitcoin::{BlockHash, BlockHeader};
 use futures::StreamExt;
-use tokio::task::JoinHandle;
 use bsvdb_base::BSVDBConfig;
 use crate::result::CliResult;
 use bsvdb_blockarchive::{BlockArchive, BlockHashListStream, SimpleFileBasedBlockArchive};
-use bsvdb_blockarchive::Result as BlockArchiveResult;
 use bsvdb_chainstore::{BlockInfo, BlockValidity, ChainStore, FDBChainStore};
 use bsvdb_chainstore::ChainStoreResult;
 
@@ -147,12 +148,12 @@ pub async fn sync_piped(config: &BSVDBConfig) -> CliResult<()> {
 
     const BUFFER_SIZE:usize = 1000;
 
-    type Stage1Result = (JoinHandle<ChainStoreResult<Option<BlockInfo>>>, BlockHash);
-    pub async fn stage1(mut block_iter: Pin<Box<dyn BlockHashListStream<Item=BlockHash>>>, chain_store: FDBChainStore,
+    type Stage1Result = (Pin<Box<dyn Future<Output=ChainStoreResult<Option<BlockInfo<<FDBChainStore as ChainStore>::BlockId>>>> + Send>>, BlockHash);
+    pub async fn stage1(mut block_hashes: Vec<BlockHash>, chain_store: FDBChainStore,
                         sender: Sender<Stage1Result>) -> CliResult<()> {
-        while let Some(block_hash) = block_iter.next().await {
-            let j = chain_store.get_block_info_by_hash(block_hash).await;
-            sender.send((j, block_hash)).await;
+        for block_hash in block_hashes {
+            let j = chain_store.get_block_info_by_hash(block_hash);
+            sender.send((j, block_hash)).await.expect("TODO: panic message");
         }
         Ok(())
     }
@@ -224,23 +225,28 @@ pub async fn sync_piped(config: &BSVDBConfig) -> CliResult<()> {
     let mut block_archive = SimpleFileBasedBlockArchive::new(&config.block_archive).await?;
     let (mut chain_store, _j_chain_store) = FDBChainStore::new(&config.chain_store, config.get_blockchain_id()).await?;
 
-    // let i = block_archive.block_list().await?;
-    // let (sender, mut receiver) = channel(BUFFER_SIZE);
-    // let f_stage1 = stage1(i, chain_store.clone(), sender);
-    // let j_stage1 = tokio::spawn(f_stage1);
-    //
-    // let start_time = Instant::now();
-    // let mut i = 0;
-    // while let Some((j, h)) = receiver.recv().await {
-    //     let k = j.await;
-    //     i += 1;
-    //     if i % 10_000 == 0 {
-    //         let dur = start_time.elapsed();
-    //         println!("found {} blocks, {} blocks/sec", i, (i as f32)/dur.as_secs_f32());
-    //     }
-    // }
-    // let dur = start_time.elapsed();
-    // println!("found {} blocks, {} blocks/sec", i, (i as f32)/dur.as_secs_f32());
+    let mut i = block_archive.block_list().await?;
+    let mut r = vec![];
+    while let Some(b) = i.next().await {
+        r.push(b);
+    }
+    println!("got all block hashes");
+    let (sender, mut receiver) = channel(BUFFER_SIZE);
+    let f_stage1 = stage1(r, chain_store.clone(), sender);
+    let j_stage1 = tokio::spawn(f_stage1);
+    
+    let start_time = Instant::now();
+    let mut i = 0;
+    while let Some((j, h)) = receiver.recv().await {
+        let k = j.await;
+        i += 1;
+        if i % 10_000 == 0 {
+            let dur = start_time.elapsed();
+            println!("found {} blocks, {} blocks/sec", i, (i as f32)/dur.as_secs_f32());
+        }
+    }
+    let dur = start_time.elapsed();
+    println!("found {} blocks, {} blocks/sec", i, (i as f32)/dur.as_secs_f32());
 
     // let (s2, r2) = channel(BUFFER_SIZE);
     // let f_stage2 = stage2(receiver, config.clone(), s2);
@@ -253,7 +259,7 @@ pub async fn sync_piped(config: &BSVDBConfig) -> CliResult<()> {
     // let f_stage4 = stage4(r3);
     // let j_stag4 = tokio::spawn(f_stage4);
 
-    j_stage1.await?;
+    j_stage1.await?.expect("TODO: panic message");
     // j_stage2.await?;
     // j_stage3.await?;
     // let (mut headers, mut parent_children, mut known_parents) = j_stag4.await?.unwrap();
