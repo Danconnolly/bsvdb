@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::fmt::format;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -62,31 +63,27 @@ impl ChainStore for FDBChainStore {
         Box::pin(async move {
             let (tx, rx) = oneshot_channel();
             sender.send((FDBChainStoreMessage::BlockInfo(db_id), tx)).await.map_err(|e| {
-                eprintln!("Failed to send message: {}", e);
-                "Failed to send message"
+                ChainStoreError::SendError(format!("{}", e))
             })?;
             match rx.await {
                 Ok(FDBChainStoreReply::BlockInfoReply(r)) => Ok(r),
-                Err(e) => {
-                    eprintln!("Failed to receive reply: {}", e);
-                    Err("Failed to receive reply".into())
-                }
+                Err(e) => Err(ChainStoreError::from(e))
             }
         })
     }
 
-    async fn get_block_info_by_hash(&self, hash: BlockHash) -> JoinHandle<ChainStoreResult<Option<BlockInfo>>> {
-        let s = self.sender.clone();
-        tokio::spawn(async move {
-            let (tx, rx) = oneshot_channel();
-            let s = s.send((FDBChainStoreMessage::BlockInfoByHash(hash), tx)).await;
-            if s.is_err() {
-                return Err(ChainStoreError::SendError);
-            }
-            let FDBChainStoreReply::BlockInfoReply(r) = rx.await?;
-            Ok(r)
-        })
-    }
+    // async fn get_block_info_by_hash(&self, hash: BlockHash) -> JoinHandle<ChainStoreResult<Option<BlockInfo>>> {
+    //     let s = self.sender.clone();
+    //     tokio::spawn(async move {
+    //         let (tx, rx) = oneshot_channel();
+    //         let s = s.send((FDBChainStoreMessage::BlockInfoByHash(hash), tx)).await;
+    //         if s.is_err() {
+    //             return Err(ChainStoreError::SendError);
+    //         }
+    //         let FDBChainStoreReply::BlockInfoReply(r) = rx.await?;
+    //         Ok(r)
+    //     })
+    // }
 
     async fn get_block_infos(&mut self, db_id: &BlockId, max_blocks: Option<u64>) -> ChainStoreResult<Vec<BlockInfo>> {
         todo!()

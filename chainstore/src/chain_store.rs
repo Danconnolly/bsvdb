@@ -1,10 +1,9 @@
 use std::future::Future;
-use std::pin::Pin;
 use async_trait::async_trait;
 use bitcoinsv::bitcoin::{BlockchainId, BlockHash, BlockHeader};
 use tokio::io::Join;
 use tokio::task::JoinHandle;
-use crate::ChainStoreResult;
+use crate::{ChainStoreError, ChainStoreResult};
 
 /// A ChainStore stores information about a blockchain.
 ///
@@ -32,10 +31,10 @@ pub trait ChainStore {
     /// Get the block info for the block with the given id.
     ///
     /// Returns a future that will produce the results.
-    fn get_block_info(&self, db_id: BlockId) -> impl Future<Output = ChainStoreResult<Option<BlockInfo>>> + Send;
+    fn get_block_info(&self, db_id: BlockId) -> impl Future<Output=ChainStoreResult<Option<BlockInfo>>> + Send;
 
     /// Returns the block info for the block with the given hash.
-    async fn get_block_info_by_hash(&self, hash: BlockHash) -> JoinHandle<ChainStoreResult<Option<BlockInfo>>>;
+    // async fn get_block_info_by_hash(&self, hash: BlockHash) -> JoinHandle<ChainStoreResult<Option<BlockInfo>>>;
 
     /// Returns the block infos for the block and its ancestors.
     ///

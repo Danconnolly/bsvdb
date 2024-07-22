@@ -1,17 +1,14 @@
-use std::sync::Arc;
-use bitcoinsv::bitcoin::{BlockchainId, BlockHash, BlockHeader};
+use bitcoinsv::bitcoin::{BlockchainId, BlockHeader};
 use foundationdb;
-use foundationdb::directory::Directory;
-use hex::FromHex;
-use bsvdb_chainstore::{BlockInfo, BlockValidity, ChainStore, FDBChainStore};
+use bsvdb_chainstore::{ChainStore, FDBChainStore};
 use rand::random;
 use bsvdb_base::ChainStoreConfig;
 
 
-/// Check that we can spawn multiple instances of queries running simultaneously
 #[tokio::test]
-async fn check_multi_spawn() {
+async fn run_fdb_tests() {
     let network = unsafe { foundationdb::boot() };
+
     // get a unique root
     let r_id: u16 = random();
     let root = format!("testing{}", r_id);
@@ -21,6 +18,28 @@ async fn check_multi_spawn() {
     };
     let (mut chain_store, mut j) = FDBChainStore::new(&config, BlockchainId::Mainnet).await.unwrap();
 
+    check_clone_store(&chain_store).await;
+    check_multi_spawn(&chain_store).await;
+    check_store(&chain_store).await;
+
+    drop(network);
+}
+
+/// Check that we can clone the chainstore into a separate task
+async fn check_clone_store(mut chain_store: &FDBChainStore) {
+
+    let c2 = chain_store.clone();
+    let j = tokio::spawn(async move {
+       c2.get_block_info(0).await
+    });
+    let k = chain_store.get_block_info(0).await;
+    assert!(k.is_ok());
+    let l = j.await;
+    assert!(l.is_ok());
+}
+
+/// Check that we can spawn multiple instances of queries running simultaneously
+async fn check_multi_spawn(mut chain_store: &FDBChainStore) {
     // can we do lots of reads at once?
     let mut v = vec![];
     for i in 0..9 {
@@ -35,24 +54,9 @@ async fn check_multi_spawn() {
         let i = r.unwrap();
         assert!(i.is_ok());
     }
-
-    // todo: shut down the chain_store
-
-    drop(network);
 }
 
-#[tokio::test]
-async fn check_store() {
-    let network = unsafe { foundationdb::boot() };
-    // get a unique root
-    let r_id: u16 = random();
-    let root = format!("testing{}", r_id);
-    let config = ChainStoreConfig {
-        enabled: true,
-        root_path: root,
-    };
-    let (mut chain_store, mut j) = FDBChainStore::new(&config, BlockchainId::Mainnet).await.unwrap();
-
+async fn check_store(mut chain_store: &FDBChainStore) {
     // get genesis block by id
     let g_block = chain_store.get_block_info(0).await.unwrap();
     assert!(g_block.is_some());
@@ -100,56 +104,5 @@ async fn check_store() {
     // let r = dir.remove(&trx, &*root).await.unwrap();
     // trx.commit().await.unwrap();
 
-    drop(network);
 }
 
-// #[tokio::test]
-// async fn fdb_experiments() {
-//     let network = unsafe { foundationdb::boot() };
-//
-//     let db = foundationdb::Database::default().unwrap();
-//     let r_dir = foundationdb::directory::DirectoryLayer::default();
-//     let root_dir = vec![String::from("experiments")];
-//     let trx = db.create_trx().unwrap();
-//     let dir = r_dir.create_or_open(&trx, &root_dir, None, None).await.unwrap();
-//     trx.commit().await.unwrap();
-//
-//     let k = dir.pack(&(String::from("one"), )).unwrap();
-//     let f = db.run(|trx, _maybe_committed| {
-//             let k2 = k.clone();
-//             async move {
-//                 trx.set(&*k2, b"world");
-//                 Ok(())
-//             }
-//         }).await;
-//
-//     let db2 = db.clone();
-//     let g = tokio::spawn(
-//         async move {
-//             db2.run(|trx, _maybe_committed| {
-//                 let k2 = k.clone();
-//                 async move {
-//                     trx.set(&*k2, b"world");
-//                     Ok(())
-//                 }}).await
-//         }
-//     );
-//     let p = g.await;
-//     println!("{:?}", p);
-//
-//     // let h = tokio::spawn(
-//     //     async move {
-//     //         db.run(|trx, _maybe_committed| {
-//     //             let k2 = k.clone();
-//     //             async move {
-//     //                 trx.set(&*k2, b"world");
-//     //                 Ok(())
-//     //             }}).await
-//     //     }
-//     // );
-//     // let p = g.await;
-//     // println!("{:?}", p);
-//
-//
-//     drop(network);
-// }
