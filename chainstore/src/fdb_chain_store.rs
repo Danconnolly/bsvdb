@@ -372,15 +372,17 @@ impl FDBChainStoreActor {
         Ok(id)
     }
 
-    async fn get_chain_state(&mut self) -> ChainStoreResult<ChainState<<FDBChainStore as ChainStore>::BlockId>> {
+    async fn get_chain_state(&self, reply: OneshotSender<FDBChainStoreReply>) -> ChainStoreResult<JoinHandle<()>> {
         let k = Self::get_state_key(&self.chain_dir)?;
         let trx = self.db.create_trx()?;
-        let v = trx.get(k.as_slice(), false).await?.unwrap();
-        trx.cancel();
-        Ok(FDBChainStoreActor::decode_chain_state(&v.to_vec()))
+        Ok(tokio::spawn(async move {
+            let v = trx.get(k.as_slice(), false).await.unwrap().expect("chainstate missing from db");
+            let r = Self::decode_chain_state(&v.to_vec());
+            reply.send(FDBChainStoreReply::ChainStateReply(r)).expect("send of reply failed in get_chain_state()");
+        }))
     }
 
-    async fn get_block_info(&mut self, db_id: <FDBChainStore as ChainStore>::BlockId, reply: OneshotSender<FDBChainStoreReply>) ->ChainStoreResult<JoinHandle<()>> {
+    async fn get_block_info(&self, db_id: <FDBChainStore as ChainStore>::BlockId, reply: OneshotSender<FDBChainStoreReply>) ->ChainStoreResult<JoinHandle<()>> {
         let k = Self::get_block_info_key(&self.infos_dir, db_id)?;
         let trx = self.db.create_trx()?;
         Ok(tokio::spawn(async move {
@@ -486,7 +488,10 @@ impl FDBChainStoreActor {
             tokio::select! {
                 Some((msg, reply)) = self.receiver.recv() => {
                     match msg {
-                        FDBChainStoreMessage::ChainState => {},
+                        FDBChainStoreMessage::ChainState => {
+                            let j = self.get_chain_state(reply).await.unwrap();
+                            tasks.push(j);
+                        },
                         FDBChainStoreMessage::BlockInfo(db_id) => {
                             let j = self.get_block_info(db_id, reply).await.unwrap();
                             tasks.push(j);
@@ -495,8 +500,8 @@ impl FDBChainStoreActor {
                             let j = self.get_block_info_by_hash(block_hash, reply).await.unwrap();
                             tasks.push(j);
                         },
-                        FDBChainStoreMessage::BlockInfos(a, b) => {},
-                        FDBChainStoreMessage::StoreBlockInfo(a) => {},
+                        FDBChainStoreMessage::BlockInfos(a, b) => {}, // todo
+                        FDBChainStoreMessage::StoreBlockInfo(a) => {}, // todo
                         FDBChainStoreMessage::Shutdown => {
                             reply.send(FDBChainStoreReply::Done).expect("unexpected failure shutting down");
                             break;

@@ -68,6 +68,10 @@ async fn check_multi_spawn(chain_store: &FDBChainStore) {
 }
 
 async fn check_store(chain_store: &FDBChainStore) {
+    // check chain_state
+    let cs = chain_store.get_chain_state().await.unwrap();
+    assert_eq!(cs.most_work_tip, 0);        // expecting empty db with only genesis block
+
     // get genesis block by id
     let g_block = chain_store.get_block_info(0).await.unwrap();
     assert!(g_block.is_some());
@@ -76,10 +80,10 @@ async fn check_store(chain_store: &FDBChainStore) {
     assert_eq!(g_block.height, 0);
     assert_eq!(g_block.size, Some(285));
 
-    // // get genesis block by hash
+    // get genesis block by hash
     // let g_block2 = chain_store.get_block_info_by_hash(&BlockHeader::get_genesis(BlockchainId::Mainnet).hash()).await.unwrap().unwrap();
     // assert_eq!(g_block2.height, 0);
-    //
+
     // let hdr1 = BlockHeader::from_hex("010000006fe28c0ab6f1b372c1a6a246ae63f74f931e8365e15a089c68d6190000000000982051fd1e4ba744bbbe680e1fee14677ba1a3c3540bf7b1cdb606e857233e0e61bc6649ffff001d01e36299").unwrap();
     // let info1 = BlockInfo {
     //     id: 0,      // should be updated
@@ -107,13 +111,5 @@ async fn check_store(chain_store: &FDBChainStore) {
     // assert_eq!(i2.total_size, Some(500));
     // let g2 = chain_store.get_block_info(&0).await.unwrap().unwrap();
     // assert_eq!(g2.next_ids, vec![1]);
-    //
-    // // clear the testing directory
-    // let fdb = foundationdb::Database::default().unwrap();
-    // let dir = foundationdb::directory::DirectoryLayer::default();
-    // let trx = fdb.create_trx().unwrap();
-    // let r = dir.remove(&trx, &*root).await.unwrap();
-    // trx.commit().await.unwrap();
-
 }
 
