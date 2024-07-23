@@ -455,9 +455,10 @@ impl FDBChainStoreActor {
                 }
                 let b_info = Self::decode_block_info(&r.unwrap().to_vec());
                 id = b_info.prev_id;
+                let h = b_info.height;
                 tx.send(b_info).await.unwrap();
                 x += 1;
-                if x >= num_blocks {
+                if x >= num_blocks || h == 0 {
                     break;
                 }
             }
@@ -466,6 +467,7 @@ impl FDBChainStoreActor {
 
     async fn store_block_info(&self, mut block_info: BlockInfo<<FDBChainStore as ChainStore>::BlockId>, reply: OneshotSender<FDBChainStoreReply>) ->
                                                                                                         ChainStoreResult<JoinHandle<()>> {
+        panic!("fix this to update the chain status");
         let trx = self.db.create_trx()?;
         let h_index_dir = self.h_index_dir.clone();
         let chain_dir = self.chain_dir.clone();

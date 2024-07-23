@@ -47,7 +47,7 @@ pub trait ChainStore {
     /// genesis block.
     async fn get_block_infos(&self, db_id: Self::BlockId, max_blocks: Option<u64>) -> ChainStoreResult<impl BlockInfoStream<Self::BlockId>>;
 
-    /// Store the block info in the ChainStore, returning an updated BlockInfo structure.
+    /// Store the block info in the ChainStore, returning an updated BlockInfo structure and updating the ChainState as required.
     ///
     /// The block_id field of the BlockInfo structure is ignored and will be set by the ChainStore.
     ///
@@ -93,6 +93,7 @@ pub enum BlockValidity {
 }
 
 /// The BlockInfo struct contains information about a block.
+// todo: add version and total_fees fields
 #[derive(Debug, Clone, PartialEq)]
 pub struct BlockInfo<BlockId> {
     pub id: BlockId,

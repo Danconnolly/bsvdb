@@ -161,6 +161,9 @@ async fn main() {
                 println!("ChainStore is not enabled.")
             }
             let network = unsafe { foundationdb::boot() };
+            // todo: add a check to check that the ChainState is up-to-date
+            // todo: add a check to check that the total variables are correctly up to date, and the chainwork, and miners are correctly set
+            // todo: add a check to check that the BlockValidity is correctly set
             match cs_cmd {
                 CSCommands::Block {block_hash} => {
                     get_block_info(&config, block_hash).await;
