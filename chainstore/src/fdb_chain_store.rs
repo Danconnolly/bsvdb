@@ -1,7 +1,9 @@
 use std::borrow::Cow;
+use std::cmp::max;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::time::Duration;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::sync::oneshot::channel as oneshot_channel;
@@ -12,10 +14,12 @@ use bitcoinsv::bitcoin::{BlockchainId, BlockHash, BlockHeader, Encodable};
 use foundationdb::directory::{Directory, DirectoryOutput};
 use foundationdb::Transaction;
 use foundationdb::tuple::{Bytes, Element, pack, unpack};
+use futures::Stream;
+use tokio::runtime::{Handle, Runtime};
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
 use bsvdb_base::ChainStoreConfig;
-use crate::chain_store::ChainState;
+use crate::chain_store::{BlockInfoStream, BlockInfoStreamFromChannel, ChainState};
 use crate::{BlockInfo, BlockValidity, ChainStore, ChainStoreError, ChainStoreResult};
 
 
@@ -63,7 +67,7 @@ impl FDBChainStore {
 impl ChainStore for FDBChainStore {
     type BlockId = u64;
 
-    fn get_chain_state(&self) -> Pin<Box<dyn Future<Output=ChainStoreResult<ChainState<Self::BlockId>>> + Send>> {
+    fn get_chain_state(&self) -> Pin<Box<dyn Future<Output=ChainStoreResult<ChainState<<Self as ChainStore>::BlockId>>> + Send>> {
         let sender = self.sender.clone();
         Box::pin(async move {
             let (tx, rx) = oneshot_channel();
@@ -108,20 +112,28 @@ impl ChainStore for FDBChainStore {
         })
     }
 
-    // todo: how am I going to do this? A stream? start with a vec
-    fn get_block_infos(&self, db_id: Self::BlockId, max_blocks: Option<u64>) -> Pin<Box<dyn Future<Output=ChainStoreResult<Vec<BlockInfo<Self::BlockId>>>> + Send>> {
+    // return a BlockInfoStream which will stream the BlockInfo's from db_id downwards, for max_blocks or until reaching Genesis
+    // it returns the BlockInfoStream directly, not a future to the BlockInfoStream.
+    //
+    // There are three channels involved here, the first two of which are normal for every command and the last one is specfic to this command:
+    //  1. The self.sender channel which is used for sending commands to the Actor
+    //  2. The (tx,rx) one shot channel which is used for sending back the results - in this case we dont really need this and just send back an empty reply, but we have to conform to the command standard
+    //  3. A temporary channel for the stream of results which are sent by a task spawned by the Actor and are presented to the caller through the BlockInfoStream interface.
+    async fn get_block_infos(&self, db_id: Self::BlockId, max_blocks: Option<u64>) -> ChainStoreResult<BlockInfoStreamFromChannel<Self::BlockId>> {
         let sender = self.sender.clone();
-        Box::pin(async move {
-            let (tx, rx) = oneshot_channel();
-            sender.send((FDBChainStoreMessage::BlockInfo(db_id), tx)).await.map_err(|e| {
-                ChainStoreError::SendError(format!("{}", e))
-            })?;
-            match rx.await {
-                Ok(FDBChainStoreReply::BlockInfosReply(r)) => Ok(r),
-                Ok(_) => Err(ChainStoreError::Internal("received unexpected reply".into())),
-                Err(e) => Err(ChainStoreError::from(e))
-            }
-        })
+        let (tx, rx) = oneshot_channel();
+        let (r_tx, r_rx) = channel(1000);
+        sender.send((FDBChainStoreMessage::BlockInfos(db_id, max_blocks, r_tx), tx)).await.map_err(|e| {
+            ChainStoreError::SendError(format!("{}", e))
+        })?;
+        match rx.await {
+            Ok(FDBChainStoreReply::BlockInfosReply) => {
+                let r = BlockInfoStreamFromChannel::new(r_rx);
+                Ok(r)
+            },
+            Ok(_) => Err(ChainStoreError::Internal("received unexpected reply".into())),
+            Err(e) => Err(ChainStoreError::from(e))
+        }
     }
 
     fn store_block_info(&self, block_info: BlockInfo<Self::BlockId>) -> Pin<Box<dyn Future<Output=ChainStoreResult<BlockInfo<Self::BlockId>>> + Send>> {
@@ -145,7 +157,7 @@ enum FDBChainStoreMessage {
     ChainState,
     BlockInfo(<FDBChainStore as ChainStore>::BlockId),
     BlockInfoByHash(BlockHash),
-    BlockInfos(<FDBChainStore as ChainStore>::BlockId, Option<u64>),
+    BlockInfos(<FDBChainStore as ChainStore>::BlockId, Option<u64>, Sender<BlockInfo<<FDBChainStore as ChainStore>::BlockId>>),
     StoreBlockInfo(BlockInfo<<FDBChainStore as ChainStore>::BlockId>),
     Shutdown,
 }
@@ -154,7 +166,7 @@ enum FDBChainStoreMessage {
 enum FDBChainStoreReply {
     ChainStateReply(ChainState<<FDBChainStore as ChainStore>::BlockId>),
     BlockInfoReply(Option<BlockInfo<<FDBChainStore as ChainStore>::BlockId>>),
-    BlockInfosReply(Vec<BlockInfo<<FDBChainStore as ChainStore>::BlockId>>),
+    BlockInfosReply,
     Done,
 }
 
@@ -421,9 +433,36 @@ impl FDBChainStoreActor {
         }))
     }
 
-    // async fn get_block_infos(&mut self, db_id: &FDBChainStore::BlockId, max_blocks: Option<u64>) -> ChainStoreResult<Vec<BlockInfo>> {
-    //     todo!()
-    // }
+    // todo: The algorithm used here is to get the block by its block_id, then get the previous by its block id, etc, etc.
+    // However, we know that the block ids are always assigned in ascending order and there are comparitively few forks.
+    // It may be more efficient to iterate through all block infos, starting with the first and going backwards, and skipping
+    // any blocks from forks.
+    async fn get_block_infos(&self, db_id: <FDBChainStore as ChainStore>::BlockId, max_blocks: Option<u64>, tx: Sender<BlockInfo<<FDBChainStore as ChainStore>::BlockId>>,
+                reply: OneshotSender<FDBChainStoreReply>) -> ChainStoreResult<JoinHandle<()>> {
+        let infos_dir = self.infos_dir.clone();
+        let trx = self.db.create_trx().unwrap();
+        let num_blocks = max_blocks.unwrap_or(u64::MAX);
+        let mut id = db_id;
+        reply.send(FDBChainStoreReply::BlockInfosReply).expect("failed to send reply");
+        Ok(tokio::spawn(async move {
+            // todo: how am I going to handle too long transactions?
+            let mut x = 0u64;
+            loop {
+                let k = Self::get_block_info_key(&infos_dir, id).unwrap();
+                let r = trx.get(k.as_slice(), false).await.unwrap();
+                if r.is_none() {
+                    break;
+                }
+                let b_info = Self::decode_block_info(&r.unwrap().to_vec());
+                id = b_info.prev_id;
+                tx.send(b_info).await.unwrap();
+                x += 1;
+                if x >= num_blocks {
+                    break;
+                }
+            }
+        }))
+    }
 
     async fn store_block_info(&self, mut block_info: BlockInfo<<FDBChainStore as ChainStore>::BlockId>, reply: OneshotSender<FDBChainStoreReply>) ->
                                                                                                         ChainStoreResult<JoinHandle<()>> {
@@ -511,9 +550,12 @@ impl FDBChainStoreActor {
                             let j = self.get_block_info_by_hash(block_hash, reply).await.unwrap();
                             tasks.push(j);
                         },
-                        FDBChainStoreMessage::BlockInfos(a, b) => {}, // todo
-                        FDBChainStoreMessage::StoreBlockInfo(a) => {
-                            let j = self.store_block_info(a, reply).await.unwrap();
+                        FDBChainStoreMessage::BlockInfos(block_id, max_blocks, r_tx) => {
+                            let j = self.get_block_infos(block_id, max_blocks, r_tx, reply).await.unwrap();
+                            tasks.push(j);
+                        },
+                        FDBChainStoreMessage::StoreBlockInfo(block_info) => {
+                            let j = self.store_block_info(block_info, reply).await.unwrap();
                             tasks.push(j);
                         },
                         FDBChainStoreMessage::Shutdown => {

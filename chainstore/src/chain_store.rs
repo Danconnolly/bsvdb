@@ -1,6 +1,10 @@
 use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 use async_trait::async_trait;
 use bitcoinsv::bitcoin::{BlockchainId, BlockHash, BlockHeader};
+use futures::Stream;
+use tokio::sync::mpsc::Receiver;
 use crate::ChainStoreResult;
 
 /// A ChainStore stores information about a blockchain.
@@ -27,7 +31,7 @@ pub trait ChainStore {
     type BlockId;
 
     /// Returns the current state of the blockchain.
-    fn get_chain_state(&self) -> impl Future<Output=ChainStoreResult<ChainState<Self::BlockId>>> + Send;
+    fn get_chain_state(&self) -> impl Future<Output=ChainStoreResult<ChainState<<Self as ChainStore>::BlockId>>> + Send;
 
     /// Get the block info for the block with the given id.
     ///
@@ -41,8 +45,7 @@ pub trait ChainStore {
     ///
     /// Return at most max_blocks block infos, if given, otherwise return all block infos to the
     /// genesis block.
-    /// todo: convert to stream
-    fn get_block_infos(&self, db_id: Self::BlockId, max_blocks: Option<u64>) -> impl Future<Output=ChainStoreResult<Vec<BlockInfo<Self::BlockId>>>> + Send;
+    async fn get_block_infos(&self, db_id: Self::BlockId, max_blocks: Option<u64>) -> ChainStoreResult<impl BlockInfoStream<Self::BlockId>>;
 
     /// Store the block info in the ChainStore, returning an updated BlockInfo structure.
     ///
@@ -192,3 +195,33 @@ impl BlockInfo<u64> {
         }
     }
 }
+
+/// A stream of BlockInfos, returned by [ChainStore::get_block_infos].
+#[async_trait]
+pub trait BlockInfoStream<T>: Stream<Item = BlockInfo<T>> + Send {}
+
+/// An implementation of [BlockInfoStream].
+///
+/// It expects a background task to be created which sends block hashes to a channel. This stream
+/// reads the BlockInfos from the channel.
+pub struct BlockInfoStreamFromChannel<T> where T: Send {
+    // The receiver to which the background task sends block infos.
+    receiver: Receiver<BlockInfo<T>>,
+}
+
+impl<T> BlockInfoStreamFromChannel<T> where T: Send {
+    /// Create a new BlockInfoStreamFromChannel, with a receiving end of a channel.
+    pub fn new(receiver: Receiver<BlockInfo<T>>) -> BlockInfoStreamFromChannel<T> {
+        BlockInfoStreamFromChannel { receiver }
+    }
+}
+
+impl<T> Stream for BlockInfoStreamFromChannel<T> where T: Send {
+    type Item = BlockInfo<T>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Pin::new(&mut self.receiver).poll_recv(cx)
+    }
+}
+
+impl<T> BlockInfoStream<T> for BlockInfoStreamFromChannel<T> where T: Send {}

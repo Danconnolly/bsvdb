@@ -7,7 +7,7 @@ use bitcoinsv::bitcoin::BlockHash;
 use clap::{Parser, Subcommand};
 use bsvdb_base::{BSVDBConfig};
 use crate::ba::{check_all_blocks, check_block, check_links, header, list_blocks, rpc_import};
-use crate::cs::get_block_info;
+use crate::cs::{cs_list_blocks, get_block_info};
 use crate::global::{sync_piped};
 
 /// A CLI for managing bsvdb components and systems.
@@ -109,6 +109,11 @@ enum CSCommands {
         /// Block hash.
         block_hash: BlockHash,
     },
+    /// List blocks starting at given id and moving up the chain.
+    List {
+        /// Block ID
+        block_id: u64,
+    }
 }
 
 #[tokio::main]
@@ -159,6 +164,9 @@ async fn main() {
             match cs_cmd {
                 CSCommands::Block {block_hash} => {
                     get_block_info(&config, block_hash).await;
+                },
+                CSCommands::List {block_id} => {
+                    cs_list_blocks(&config, block_id).await;
                 }
             }
             drop(network);
