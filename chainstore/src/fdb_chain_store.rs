@@ -12,8 +12,9 @@ use tokio::sync::Mutex;
 use async_trait::async_trait;
 use bitcoinsv::bitcoin::{BlockchainId, BlockHash, BlockHeader, Encodable};
 use foundationdb::directory::{Directory, DirectoryOutput};
-use foundationdb::Transaction;
+use foundationdb::{FdbError, Transaction};
 use foundationdb::tuple::{Bytes, Element, pack, unpack};
+use futures::future::err;
 use futures::Stream;
 use tokio::runtime::{Handle, Runtime};
 use tokio::task::JoinHandle;
@@ -440,26 +441,37 @@ impl FDBChainStoreActor {
     async fn get_block_infos(&self, db_id: <FDBChainStore as ChainStore>::BlockId, max_blocks: Option<u64>, tx: Sender<BlockInfo<<FDBChainStore as ChainStore>::BlockId>>,
                 reply: OneshotSender<FDBChainStoreReply>) -> ChainStoreResult<JoinHandle<()>> {
         let infos_dir = self.infos_dir.clone();
-        let trx = self.db.create_trx().unwrap();
+        let mut trx = self.db.create_trx().unwrap();
         let num_blocks = max_blocks.unwrap_or(u64::MAX);
         let mut id = db_id;
         reply.send(FDBChainStoreReply::BlockInfosReply).expect("failed to send reply");
         Ok(tokio::spawn(async move {
-            // todo: how am I going to handle too long transactions?
             let mut x = 0u64;
             loop {
                 let k = Self::get_block_info_key(&infos_dir, id).unwrap();
-                let r = trx.get(k.as_slice(), false).await.unwrap();
-                if r.is_none() {
-                    break;
-                }
-                let b_info = Self::decode_block_info(&r.unwrap().to_vec());
-                id = b_info.prev_id;
-                let h = b_info.height;
-                tx.send(b_info).await.unwrap();
-                x += 1;
-                if x >= num_blocks || h == 0 {
-                    break;
+                match trx.get(k.as_slice(), false).await {
+                    Err(e) => match e.code() {
+                        1007 => {
+                            // transaction too old, reset the transaction and continue
+                            trx.reset();
+                        }
+                        _ => {
+                            break;
+                        }
+                    },
+                    Ok(r) => {
+                        if r.is_none() {
+                            break;
+                        }
+                        let b_info = Self::decode_block_info(&r.unwrap().to_vec());
+                        id = b_info.prev_id;
+                        let h = b_info.height;
+                        tx.send(b_info).await.unwrap();
+                        x += 1;
+                        if x >= num_blocks || h == 0 {
+                            break;
+                        }
+                    }
                 }
             }
         }))
