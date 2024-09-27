@@ -546,11 +546,11 @@ impl FDBChainStoreActor {
                 .get(k.as_slice(), false)
                 .await
                 .unwrap()
-                .expect("chainstate missing from db");
+                .expect("chainstate missing from db"); // todo: remove
             let r = Self::decode_chain_state(&v.to_vec());
             reply
                 .send(FDBChainStoreReply::ChainStateReply(r))
-                .expect("send of reply failed in get_chain_state()");
+                .expect("send of reply failed in get_chain_state()"); // todo: remove
         }))
     }
 
