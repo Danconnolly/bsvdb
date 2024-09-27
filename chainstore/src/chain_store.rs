@@ -59,7 +59,8 @@ pub trait ChainStore {
         max_blocks: Option<u64>,
     ) -> ChainStoreResult<impl BlockInfoStream<Self::BlockId>>;
 
-    /// Store the block info in the ChainStore, returning an updated BlockInfo structure and updating the ChainState as required.
+    /// Store the block info in the ChainStore, returning an updated BlockInfo structure and updating
+    /// the ChainState as required.
     ///
     /// The block_id field of the BlockInfo structure is ignored and will be set by the ChainStore.
     ///

@@ -175,6 +175,12 @@ impl ChainStore for FDBChainStore {
         }
     }
 
+    /// Store the block info in the ChainStore, returning an updated BlockInfo structure and updating
+    /// the ChainState as required.
+    ///
+    /// Implementation of [ChainStore::store_block_info()], see there for more information.
+    ///
+    /// Calls the actor function StoreBlockInfo().
     fn store_block_info(
         &self,
         block_info: BlockInfo<Self::BlockId>,
@@ -219,7 +225,9 @@ enum FDBChainStoreReply {
     Done,
 }
 
-// the chain store agent
+/// the chain store actor
+///
+/// todo: update to use minactor
 struct FDBChainStoreActor {
     receiver: Receiver<(FDBChainStoreMessage, OneshotSender<FDBChainStoreReply>)>,
     db: foundationdb::Database,
@@ -526,7 +534,8 @@ impl FDBChainStoreActor {
         Ok(id)
     }
 
-    async fn get_chain_state(
+    /// Handles the ChainState message.
+    async fn handle_get_chain_state(
         &self,
         reply: OneshotSender<FDBChainStoreReply>,
     ) -> ChainStoreResult<JoinHandle<()>> {
@@ -563,6 +572,9 @@ impl FDBChainStoreActor {
         }))
     }
 
+    /// Gets the block info given the hash.
+    ///
+    /// Expected to be called as part of a larger transaction.
     async fn sub_block_info_by_hash(
         trx: &Transaction,
         hash: &BlockHash,
@@ -582,6 +594,7 @@ impl FDBChainStoreActor {
         }
     }
 
+    /// Handles the actor BlockInfo message.
     async fn get_block_info_by_hash(
         &self,
         hash: BlockHash,
@@ -650,26 +663,27 @@ impl FDBChainStoreActor {
         }))
     }
 
+    /// Implements [ChainStore::store_block_info()].
     async fn store_block_info(
         &self,
         mut block_info: BlockInfo<<FDBChainStore as ChainStore>::BlockId>,
         reply: OneshotSender<FDBChainStoreReply>,
     ) -> ChainStoreResult<JoinHandle<()>> {
-        panic!("fix this to update the chain status");
         let trx = self.db.create_trx()?;
         let h_index_dir = self.h_index_dir.clone();
         let chain_dir = self.chain_dir.clone();
         let infos_dir = self.infos_dir.clone();
         let next_id_lck = self.next_id_lock.clone();
         Ok(tokio::spawn(async move {
+            // lookup id from hash, creating it if it doesn't exist already
             match Self::get_block_id_from_hash(&trx, &block_info.hash, &h_index_dir)
                 .await
-                .expect("couldnt get block id from hash")
+                .expect("couldnt get block id from hash")           // todo: remove
             {
                 None => {
                     let id = Self::get_next_id(&trx, &next_id_lck, &chain_dir)
                         .await
-                        .expect("couldnt get next_id");
+                        .expect("couldnt get next_id");         // todo: remove
                     let k = Self::get_h_index_key(&h_index_dir, &block_info.hash).unwrap();
                     let v = Self::encode_h_index(id);
                     trx.set(&*k, &*v);
@@ -686,10 +700,10 @@ impl FDBChainStoreActor {
                 &infos_dir,
             )
             .await
-            .expect("failed to get parent by hash");
+            .expect("failed to get parent by hash"); // todo: remove
             if parent.is_none() {
-                panic!("parent not found");
-                // return Err(ChainStoreError::ParentNotFound)
+                panic!("parent not found"); // todo
+                                            // return Err(ChainStoreError::ParentNotFound)
             }
             let mut parent = parent.unwrap();
             // check that the child is listed in the parents next_ids
@@ -728,14 +742,18 @@ impl FDBChainStoreActor {
             let k = Self::get_block_info_key(&infos_dir, block_info.id).unwrap();
             let v = Self::encode_block_info(&block_info);
             trx.set(&*k, &*v);
-            trx.commit().await.expect("couldnt commit transaction");
+            trx.commit().await.expect("couldnt commit transaction"); // todo: remove
+
+            // update the chain state if necessary - IAMHERE
+
+            // send result back
             reply
                 .send(FDBChainStoreReply::BlockInfoReply(Option::from(block_info)))
-                .expect("send of reply failed in store_block_info()");
+                .expect("send of reply failed in store_block_info()"); // todo: remove
         }))
     }
 
-    // main actor thread
+    /// main actor thread
     async fn run(&mut self) -> () {
         let mut tasks = vec![];
         loop {
@@ -743,7 +761,7 @@ impl FDBChainStoreActor {
                 Some((msg, reply)) = self.receiver.recv() => {
                     match msg {
                         FDBChainStoreMessage::ChainState => {
-                            let j = self.get_chain_state(reply).await.unwrap();
+                            let j = self.handle_get_chain_state(reply).await.unwrap();
                             tasks.push(j);
                         },
                         FDBChainStoreMessage::BlockInfo(db_id) => {
