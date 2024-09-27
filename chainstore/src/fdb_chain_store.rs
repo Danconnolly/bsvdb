@@ -1,7 +1,7 @@
 use crate::chain_store::{BlockInfoStream, BlockInfoStreamFromChannel, ChainState};
 use crate::{BlockInfo, BlockValidity, ChainStore, ChainStoreError, ChainStoreResult};
 use async_trait::async_trait;
-use bitcoinsv::bitcoin::{BlockHash, BlockHeader, BlockchainId, Encodable};
+use bitcoinsv::bitcoin::{AsyncEncodable, BlockHash, BlockHeader, BlockchainId, Encodable};
 use bsvdb_base::ChainStoreConfig;
 use foundationdb::directory::{Directory, DirectoryOutput};
 use foundationdb::tuple::{pack, unpack, Bytes, Element};
@@ -800,7 +800,7 @@ mod tests {
 
     #[test]
     fn block_info_encoding() {
-        let b = BlockInfo::genesis_info(BlockchainId::Mainnet);
+        let b = BlockInfo::genesis_info(BlockchainId::Main);
         let p = FDBChainStoreActor::encode_block_info(&b);
         let v = FDBChainStoreActor::decode_block_info(&p);
         assert_eq!(b, v);

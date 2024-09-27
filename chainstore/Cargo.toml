@@ -22,7 +22,7 @@ hex = "0.4.3"
 log = "0.4.20"
 rand = "0.8.5"
 
-bitcoinsv = "0.2.6"
+bitcoinsv = "0.2.7"
 bsvdb-base = { path = "../base" }
 
 [dev-dependencies]

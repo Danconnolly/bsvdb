@@ -10,12 +10,12 @@ async-trait = "0.1.75"
 tokio-stream = { version = "0.1", features = ["full"] }
 futures = "0.3.30"
 env_logger = "0.10.1"
-clap = {  version = "4.5.2", features = ["derive", "env"]}
+clap = { version = "4.5.2", features = ["derive", "env"] }
 log = "0.4.21"
 url = "2.5.0"
 foundationdb = { version = "0.9.0", features = ["fdb-7_1"] }
-bitcoinsv = "0.2.5"
-bitcoinsv-rpc = "1.0.0"
+bitcoinsv = "0.2.7"
+bitcoinsv-rpc = "1.0.2"
 
 bsvdb-base = { path = "../base" }
 bsvdb-blockarchive = { path = "../blockarchive" }

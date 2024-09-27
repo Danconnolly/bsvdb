@@ -1,8 +1,8 @@
-use std::path::Path;
+use crate::result::{BsvDbBaseError, BsvDbBaseResult};
 use bitcoinsv::bitcoin::BlockchainId;
 use config::{Config, File, FileFormat};
 use serde::Deserialize;
-use crate::result::{BsvDbBaseError, BsvDbBaseResult};
+use std::path::Path;
 
 #[derive(Clone, Debug, Deserialize)]
 #[allow(unused)]
@@ -38,7 +38,11 @@ impl BSVDBConfig {
             None => s1,
         };
         let r: BSVDBConfig = s2.build()?.try_deserialize()?;
-        if r.blockchain != "mainnet" && r.blockchain != "testnet" && r.blockchain != "stn" && r.blockchain != "regtest" {
+        if r.blockchain != "mainnet"
+            && r.blockchain != "testnet"
+            && r.blockchain != "stn"
+            && r.blockchain != "regtest"
+        {
             Err(BsvDbBaseError::BlockchainUnknown)
         } else {
             Ok(r)
@@ -51,13 +55,13 @@ impl BSVDBConfig {
     pub fn get_blockchain_id(&self) -> BlockchainId {
         // todo: this should be provided as a function by BlockchainId
         if self.blockchain == "mainnet" {
-            return BlockchainId::Mainnet;
+            return BlockchainId::Main;
         } else if self.blockchain == "testnet" {
-            return BlockchainId::Testnet;
+            return BlockchainId::Test;
         } else if self.blockchain == "stn" {
-            return BlockchainId::Stn
+            return BlockchainId::Stn;
         } else {
-            return BlockchainId::Regtest
+            return BlockchainId::Regtest;
         }
     }
 
@@ -65,11 +69,11 @@ impl BSVDBConfig {
     pub fn get_chain_store_root_path(&self) -> String {
         if self.chain_store.root_path == "" {
             return String::from(match self.get_blockchain_id() {
-                BlockchainId::Mainnet => "bsvmain",
-                BlockchainId::Testnet => "bsvtest",
+                BlockchainId::Main => "bsvmain",
+                BlockchainId::Test => "bsvtest",
                 BlockchainId::Stn => "bsvstn",
                 BlockchainId::Regtest => "bsvregtest",
-            })
+            });
         } else {
             return self.chain_store.root_path.clone();
         }
@@ -104,4 +108,3 @@ root_path = "~/.bsvdb/blockstore"
 enabled = false
 root_path = ""
 "#;
-

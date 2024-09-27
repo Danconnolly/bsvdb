@@ -21,11 +21,11 @@ pub enum ChainStoreError {
     /// miscellaneous error
     Internal(String),
     IoError(std::io::Error),
-    BitcoinSVError(bitcoinsv::Error),
+    BitcoinSVError(bitcoinsv::BsvError),
     FdbError(FdbError),
     FdbDirectoryError(DirectoryError),
     FdbTransactionCommitError(TransactionCommitError),
-    OneshotRecvError(RecvError)
+    OneshotRecvError(RecvError),
 }
 
 impl std::fmt::Display for ChainStoreError {
@@ -41,7 +41,9 @@ impl std::fmt::Display for ChainStoreError {
             ChainStoreError::BitcoinSVError(err) => write!(f, "Bitcoin SV error: {}", err),
             ChainStoreError::FdbError(err) => write!(f, "FDB Error: {}", err),
             ChainStoreError::FdbDirectoryError(err) => write!(f, "FDB Directory Error: {:?}", err),
-            ChainStoreError::FdbTransactionCommitError(err) => write!(f, "FBD Transaction Commit Error: {}", err),
+            ChainStoreError::FdbTransactionCommitError(err) => {
+                write!(f, "FBD Transaction Commit Error: {}", err)
+            }
             ChainStoreError::OneshotRecvError(err) => write!(f, "Oneshot receiver error: {}", err),
         }
     }
@@ -59,24 +61,32 @@ impl From<std::io::Error> for ChainStoreError {
     }
 }
 
-impl From<bitcoinsv::Error> for ChainStoreError {
-    fn from(err: bitcoinsv::Error) -> ChainStoreError {
+impl From<bitcoinsv::BsvError> for ChainStoreError {
+    fn from(err: bitcoinsv::BsvError) -> ChainStoreError {
         ChainStoreError::BitcoinSVError(err)
     }
 }
 
 impl From<FdbError> for ChainStoreError {
-    fn from(err: FdbError) -> ChainStoreError { ChainStoreError::FdbError(err)}
+    fn from(err: FdbError) -> ChainStoreError {
+        ChainStoreError::FdbError(err)
+    }
 }
 
 impl From<DirectoryError> for ChainStoreError {
-    fn from(err: DirectoryError) -> ChainStoreError { ChainStoreError::FdbDirectoryError(err)}
+    fn from(err: DirectoryError) -> ChainStoreError {
+        ChainStoreError::FdbDirectoryError(err)
+    }
 }
 
 impl From<TransactionCommitError> for ChainStoreError {
-    fn from(err: TransactionCommitError) -> ChainStoreError { ChainStoreError::FdbTransactionCommitError(err)}
+    fn from(err: TransactionCommitError) -> ChainStoreError {
+        ChainStoreError::FdbTransactionCommitError(err)
+    }
 }
 
 impl From<RecvError> for ChainStoreError {
-    fn from(err: RecvError) -> ChainStoreError { ChainStoreError::OneshotRecvError(err)}
+    fn from(err: RecvError) -> ChainStoreError {
+        ChainStoreError::OneshotRecvError(err)
+    }
 }

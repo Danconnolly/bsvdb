@@ -1,11 +1,11 @@
+use crate::ChainStoreResult;
+use async_trait::async_trait;
+use bitcoinsv::bitcoin::{BlockHash, BlockHeader, BlockchainId};
+use futures::Stream;
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use async_trait::async_trait;
-use bitcoinsv::bitcoin::{BlockchainId, BlockHash, BlockHeader};
-use futures::Stream;
 use tokio::sync::mpsc::Receiver;
-use crate::ChainStoreResult;
 
 /// A ChainStore stores information about a blockchain.
 ///
@@ -31,21 +31,33 @@ pub trait ChainStore {
     type BlockId;
 
     /// Returns the current state of the blockchain.
-    fn get_chain_state(&self) -> impl Future<Output=ChainStoreResult<ChainState<<Self as ChainStore>::BlockId>>> + Send;
+    fn get_chain_state(
+        &self,
+    ) -> impl Future<Output = ChainStoreResult<ChainState<<Self as ChainStore>::BlockId>>> + Send;
 
     /// Get the block info for the block with the given id.
     ///
     /// Returns a future that will produce the results.
-    fn get_block_info(&self, db_id: Self::BlockId) -> impl Future<Output=ChainStoreResult<Option<BlockInfo<Self::BlockId>>>> + Send;
+    fn get_block_info(
+        &self,
+        db_id: Self::BlockId,
+    ) -> impl Future<Output = ChainStoreResult<Option<BlockInfo<Self::BlockId>>>> + Send;
 
     /// Returns the block info for the block with the given hash.
-    fn get_block_info_by_hash(&self, hash: BlockHash) -> impl Future<Output=ChainStoreResult<Option<BlockInfo<Self::BlockId>>>> + Send;
+    fn get_block_info_by_hash(
+        &self,
+        hash: BlockHash,
+    ) -> impl Future<Output = ChainStoreResult<Option<BlockInfo<Self::BlockId>>>> + Send;
 
     /// Returns the block infos for the block and its ancestors.
     ///
     /// Return at most max_blocks block infos, if given, otherwise return all block infos to the
     /// genesis block.
-    async fn get_block_infos(&self, db_id: Self::BlockId, max_blocks: Option<u64>) -> ChainStoreResult<impl BlockInfoStream<Self::BlockId>>;
+    async fn get_block_infos(
+        &self,
+        db_id: Self::BlockId,
+        max_blocks: Option<u64>,
+    ) -> ChainStoreResult<impl BlockInfoStream<Self::BlockId>>;
 
     /// Store the block info in the ChainStore, returning an updated BlockInfo structure and updating the ChainState as required.
     ///
@@ -72,7 +84,10 @@ pub trait ChainStore {
     ///
     /// If the validity of the parent block is HeaderInvalid, then the validity of the child block is
     /// InvalidAncestor.
-    fn store_block_info(&self, block_info: BlockInfo<Self::BlockId>) -> impl Future<Output=ChainStoreResult<BlockInfo<Self::BlockId>>> + Send;
+    fn store_block_info(
+        &self,
+        block_info: BlockInfo<Self::BlockId>,
+    ) -> impl Future<Output = ChainStoreResult<BlockInfo<Self::BlockId>>> + Send;
 }
 
 /// The BlockValidity enum describes the validity of a block.
@@ -172,27 +187,33 @@ impl BlockInfo<u64> {
             size: Some(285),
             num_tx: Some(1),
             median_time: Some(1231006505),
-            chain_work: Some(hex::decode("0000000000000000000000000000000000000000000000000000000100010001").unwrap()),
+            chain_work: Some(
+                hex::decode("0000000000000000000000000000000000000000000000000000000100010001")
+                    .unwrap(),
+            ),
             total_tx: Some(1),
             total_size: Some(285),
             miner: Some(String::from("Satoshi Nakamoto")),
             validity: BlockValidity::Valid,
         };
         match block_chain {
-            BlockchainId::Mainnet => info,
-            BlockchainId::Testnet => {
+            BlockchainId::Main => info,
+            BlockchainId::Test => {
                 info.median_time = Some(1296688602);
                 info
-            },
-            BlockchainId::Stn =>  {
+            }
+            BlockchainId::Stn => {
                 info.median_time = Some(1296688602);
                 info
-            },
+            }
             BlockchainId::Regtest => {
                 info.median_time = Some(1296688602);
-                info.chain_work = Some(hex::decode("0000000000000000000000000000000000000000000000000000000000000002").unwrap());
+                info.chain_work = Some(
+                    hex::decode("0000000000000000000000000000000000000000000000000000000000000002")
+                        .unwrap(),
+                );
                 info
-            },
+            }
         }
     }
 }
@@ -205,19 +226,28 @@ pub trait BlockInfoStream<T>: Stream<Item = BlockInfo<T>> + Send {}
 ///
 /// It expects a background task to be created which sends block hashes to a channel. This stream
 /// reads the BlockInfos from the channel.
-pub struct BlockInfoStreamFromChannel<T> where T: Send {
+pub struct BlockInfoStreamFromChannel<T>
+where
+    T: Send,
+{
     // The receiver to which the background task sends block infos.
     receiver: Receiver<BlockInfo<T>>,
 }
 
-impl<T> BlockInfoStreamFromChannel<T> where T: Send {
+impl<T> BlockInfoStreamFromChannel<T>
+where
+    T: Send,
+{
     /// Create a new BlockInfoStreamFromChannel, with a receiving end of a channel.
     pub fn new(receiver: Receiver<BlockInfo<T>>) -> BlockInfoStreamFromChannel<T> {
         BlockInfoStreamFromChannel { receiver }
     }
 }
 
-impl<T> Stream for BlockInfoStreamFromChannel<T> where T: Send {
+impl<T> Stream for BlockInfoStreamFromChannel<T>
+where
+    T: Send,
+{
     type Item = BlockInfo<T>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {

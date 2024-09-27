@@ -1,4 +1,3 @@
-
 /// Standard Result used in the library
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -10,7 +9,7 @@ pub enum Error {
     /// The block already exists in the archive. This error may be returned by [BlockArchive::store_block].
     BlockExists,
     IoError(std::io::Error),
-    BitcoinSVError(bitcoinsv::Error),
+    BitcoinSVError(bitcoinsv::BsvError),
 }
 
 impl std::fmt::Display for Error {
@@ -30,8 +29,8 @@ impl From<std::io::Error> for Error {
     }
 }
 
-impl From<bitcoinsv::Error> for Error {
-    fn from(err: bitcoinsv::Error) -> Error {
+impl From<bitcoinsv::BsvError> for Error {
+    fn from(err: bitcoinsv::BsvError) -> Error {
         Error::BitcoinSVError(err)
     }
 }

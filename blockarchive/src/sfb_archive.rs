@@ -1,15 +1,15 @@
+use crate::block_archive::{BlockHashListStream, BlockHashListStreamFromChannel};
+use crate::{BlockArchive, Error, Result};
+use async_trait::async_trait;
+use bitcoinsv::bitcoin::{AsyncEncodable, BlockHash, BlockHeader, Encodable};
+use bsvdb_base::BlockArchiveConfig;
+use hex::{FromHex, ToHex};
 use std::path::PathBuf;
 use std::pin::Pin;
-use async_trait::async_trait;
-use bitcoinsv::bitcoin::{BlockHash, BlockHeader, Encodable};
-use tokio::io::AsyncRead;
-use crate::{BlockArchive, Error, Result};
-use hex::{FromHex, ToHex};
 use tokio::fs::File;
-use tokio_stream::StreamExt;
+use tokio::io::AsyncRead;
 use tokio_stream::wrappers::ReadDirStream;
-use crate::block_archive::{BlockHashListStream, BlockHashListStreamFromChannel};
-use bsvdb_base::BlockArchiveConfig;
+use tokio_stream::StreamExt;
 
 // the absolute maximum number of blocks that will be stored
 // this is used to limit the size of the channel used to send block hashes
@@ -41,18 +41,13 @@ pub struct SimpleFileBasedBlockArchive {
     pub root_path: PathBuf,
 }
 
-impl SimpleFileBasedBlockArchive
-{
+impl SimpleFileBasedBlockArchive {
     /// Create a new block archive with the given root path.
     pub async fn new(config: &BlockArchiveConfig) -> Result<SimpleFileBasedBlockArchive> {
         let root_path = PathBuf::from(config.root_path.clone());
         // Check if the root_path is accessible
         match tokio::fs::metadata(&root_path).await {
-            Ok(_) => {
-                Ok(SimpleFileBasedBlockArchive {
-                    root_path,
-                })
-            },
+            Ok(_) => Ok(SimpleFileBasedBlockArchive { root_path }),
             Err(e) => {
                 Err(e.into()) // Convert the error into your custom error type
             }
@@ -73,7 +68,10 @@ impl SimpleFileBasedBlockArchive
     // Get a list of all blocks in the background, sending results to the channel.
     // Do not return blocks that are stored in the wrong location because these
     // won't be retrievable by get_block().
-    async fn block_list_bgrnd(root_path: PathBuf, transmit: tokio::sync::mpsc::Sender<BlockHash>) -> Result<()> {
+    async fn block_list_bgrnd(
+        root_path: PathBuf,
+        transmit: tokio::sync::mpsc::Sender<BlockHash>,
+    ) -> Result<()> {
         let mut stack = Vec::new();
         stack.push(root_path.clone());
         while let Some(path) = stack.pop() {
@@ -94,17 +92,21 @@ impl SimpleFileBasedBlockArchive
                     match BlockHash::from_hex(f_name) {
                         Ok(h) => {
                             // ignore files that are not in the correct location
-                            let correct_path = root_path.join(&f_name[62..]).join(&f_name[60..62]).join(f_name).with_extension("bin");
+                            let correct_path = root_path
+                                .join(&f_name[62..])
+                                .join(&f_name[60..62])
+                                .join(f_name)
+                                .with_extension("bin");
                             if path != correct_path {
                                 continue;
                             }
                             match transmit.send(h).await {
                                 Ok(_) => {}
-                                Err(_) => return Ok(())     // this is not an error, the receiver has merely dropped
+                                Err(_) => return Ok(()), // this is not an error, the receiver has merely dropped
                             }
                         }
                         // ignore files which are not valid block hashes
-                        Err(_) => continue
+                        Err(_) => continue,
                     };
                 }
             }
@@ -114,8 +116,7 @@ impl SimpleFileBasedBlockArchive
 }
 
 #[async_trait]
-impl BlockArchive for SimpleFileBasedBlockArchive
-{
+impl BlockArchive for SimpleFileBasedBlockArchive {
     async fn get_block(&self, block_hash: &BlockHash) -> Result<Box<dyn AsyncRead + Unpin + Send>> {
         let path = self.get_path_from_hash(block_hash);
         match File::open(path).await {
@@ -123,8 +124,8 @@ impl BlockArchive for SimpleFileBasedBlockArchive
             Err(e) => match e.kind() {
                 // if the file does not exist, return a BlockNotFound error
                 std::io::ErrorKind::NotFound => Err(Error::BlockNotFound),
-                _ => Err(e.into())
-            }
+                _ => Err(e.into()),
+            },
         }
     }
 
@@ -136,12 +137,16 @@ impl BlockArchive for SimpleFileBasedBlockArchive
             Err(e) => match e.kind() {
                 // if the file does not exist, return false
                 std::io::ErrorKind::NotFound => Ok(false),
-                _ => Err(e.into())
-            }
+                _ => Err(e.into()),
+            },
         }
     }
 
-    async fn store_block(&self, block_hash: &BlockHash, block: &mut Box<dyn AsyncRead + Unpin + Send>) -> Result<()> {
+    async fn store_block(
+        &self,
+        block_hash: &BlockHash,
+        block: &mut Box<dyn AsyncRead + Unpin + Send>,
+    ) -> Result<()> {
         if self.block_exists(block_hash).await? {
             return Err(Error::BlockExists);
         }
@@ -161,20 +166,20 @@ impl BlockArchive for SimpleFileBasedBlockArchive
             Err(e) => match e.kind() {
                 // if the file does not exist, return a BlockNotFound error
                 std::io::ErrorKind::NotFound => Err(Error::BlockNotFound),
-                _ => Err(e.into())
-            }
+                _ => Err(e.into()),
+            },
         }
     }
 
     async fn block_header(&self, block_hash: &BlockHash) -> Result<BlockHeader> {
         let path = self.get_path_from_hash(block_hash);
         match File::open(path).await {
-            Ok(mut file) => Ok(BlockHeader::from_binary(&mut file).await?),
+            Ok(mut file) => Ok(BlockHeader::async_from_binary(&mut file).await?),
             Err(e) => match e.kind() {
                 // if the file does not exist, return a BlockNotFound error
                 std::io::ErrorKind::NotFound => Err(Error::BlockNotFound),
-                _ => Err(e.into())
-            }
+                _ => Err(e.into()),
+            },
         }
     }
 
@@ -190,7 +195,7 @@ impl BlockArchive for SimpleFileBasedBlockArchive
     ///
     /// This function does not return blocks that are stored in the wrong location because these
     /// won't be retrievable by get_block().
-    async fn block_list(&mut self) -> Result<Pin<Box<dyn BlockHashListStream<Item=BlockHash>>>> {
+    async fn block_list(&mut self) -> Result<Pin<Box<dyn BlockHashListStream<Item = BlockHash>>>> {
         // make the channel large enough to buffer all hashes, including testnet
         // so that the background task can collect all buffer hashes despite how slow the consumer is
         let (tx, rx) = tokio::sync::mpsc::channel(MAX_BLOCKS);
@@ -199,14 +204,13 @@ impl BlockArchive for SimpleFileBasedBlockArchive
     }
 }
 
-
 #[cfg(test)]
 mod tests {
-    use std::io::Cursor;
+    use super::*;
     use hex::FromHex;
+    use std::io::Cursor;
     use tempfile::tempdir;
     use tokio::io::AsyncReadExt;
-    use super::*;
 
     fn get_testdata_config() -> BlockArchiveConfig {
         BlockArchiveConfig {
@@ -220,7 +224,9 @@ mod tests {
     async fn check_path_from_hash() {
         let c = get_testdata_config();
         let s = SimpleFileBasedBlockArchive::new(&c).await.unwrap();
-        let h = BlockHash::from_hex("00000000000000000124a294b9e1e65224f0636ffd4dadac777bed5e709dc531").unwrap();
+        let h =
+            BlockHash::from_hex("00000000000000000124a294b9e1e65224f0636ffd4dadac777bed5e709dc531")
+                .unwrap();
         let path = s.get_path_from_hash(&h);
         assert_eq!(path, PathBuf::from("../testdata/blockarchive/31/c5/00000000000000000124a294b9e1e65224f0636ffd4dadac777bed5e709dc531.bin"));
     }
@@ -273,7 +279,9 @@ mod tests {
     async fn test_get_block() {
         let c = get_testdata_config();
         let archive = SimpleFileBasedBlockArchive::new(&c).await.unwrap();
-        let h = BlockHash::from_hex("00000000000000a86c0a6d7b3445ff9e64908d6417cd6b256dbc23efd01de26f").unwrap();
+        let h =
+            BlockHash::from_hex("00000000000000a86c0a6d7b3445ff9e64908d6417cd6b256dbc23efd01de26f")
+                .unwrap();
         let mut block = archive.get_block(&h).await.unwrap();
         let mut buf = Vec::new();
         block.read_to_end(&mut buf).await.unwrap();
@@ -285,16 +293,16 @@ mod tests {
     async fn test_unknown_block() {
         let c = get_testdata_config();
         let archive = SimpleFileBasedBlockArchive::new(&c).await.unwrap();
-        let h = BlockHash::from_hex("0000000000000000094cc2ba6cc08514bcf9cbae26719d0a654a7754f3c75ef1").unwrap();
+        let h =
+            BlockHash::from_hex("0000000000000000094cc2ba6cc08514bcf9cbae26719d0a654a7754f3c75ef1")
+                .unwrap();
         let block = archive.get_block(&h).await;
         match block {
             Ok(_) => assert!(false),
-            Err(e) => {
-                match e {
-                    Error::BlockNotFound => assert!(true),
-                    _ => assert!(false)
-                }
-            }
+            Err(e) => match e {
+                Error::BlockNotFound => assert!(true),
+                _ => assert!(false),
+            },
         }
     }
 
@@ -303,7 +311,9 @@ mod tests {
     async fn test_block_exists() {
         let c = get_testdata_config();
         let archive = SimpleFileBasedBlockArchive::new(&c).await.unwrap();
-        let h = BlockHash::from_hex("00000000000000a86c0a6d7b3445ff9e64908d6417cd6b256dbc23efd01de26f").unwrap();
+        let h =
+            BlockHash::from_hex("00000000000000a86c0a6d7b3445ff9e64908d6417cd6b256dbc23efd01de26f")
+                .unwrap();
         let exists = archive.block_exists(&h).await.unwrap();
         assert!(exists);
     }
@@ -313,7 +323,9 @@ mod tests {
     async fn test_unknown_block_exists() {
         let c = get_testdata_config();
         let archive = SimpleFileBasedBlockArchive::new(&c).await.unwrap();
-        let h = BlockHash::from_hex("0000000000000000094cc2ba6cc08514bcf9cbae26719d0a654a7754f3c75ef1").unwrap();
+        let h =
+            BlockHash::from_hex("0000000000000000094cc2ba6cc08514bcf9cbae26719d0a654a7754f3c75ef1")
+                .unwrap();
         let exists = archive.block_exists(&h).await.unwrap();
         assert!(!exists);
     }
@@ -323,7 +335,9 @@ mod tests {
     async fn test_wrong_location_block_exists() {
         let c = get_testdata_config();
         let archive = SimpleFileBasedBlockArchive::new(&c).await.unwrap();
-        let h = BlockHash::from_hex("000000001ee3392a6b6ba0bf2480a0f6bf9cdaaefa331bc0dfb243523af41a44").unwrap();
+        let h =
+            BlockHash::from_hex("000000001ee3392a6b6ba0bf2480a0f6bf9cdaaefa331bc0dfb243523af41a44")
+                .unwrap();
         let exists = archive.block_exists(&h).await.unwrap();
         assert!(!exists);
     }
@@ -337,10 +351,15 @@ mod tests {
             root_path: String::from(root_path.path().to_str().unwrap()),
         };
         let archive = SimpleFileBasedBlockArchive::new(&c).await.unwrap();
-        let h = BlockHash::from_hex("00000000000000a86c0a6d7b3445ff9e64908d6417cd6b256dbc23efd01de26f").unwrap();
+        let h =
+            BlockHash::from_hex("00000000000000a86c0a6d7b3445ff9e64908d6417cd6b256dbc23efd01de26f")
+                .unwrap();
         let block = "This is a block".as_bytes().to_vec();
         let block_cursor = Box::new(Cursor::new(block.clone()));
-        archive.store_block(&h, &mut (block_cursor as Box<dyn AsyncRead + Unpin + Send>)).await.unwrap();
+        archive
+            .store_block(&h, &mut (block_cursor as Box<dyn AsyncRead + Unpin + Send>))
+            .await
+            .unwrap();
         let exists = archive.block_exists(&h).await.unwrap();
         assert!(exists);
         let mut stored_block = archive.get_block(&h).await.unwrap();
@@ -358,23 +377,28 @@ mod tests {
             root_path: String::from(root_path.path().to_str().unwrap()),
         };
         let archive = SimpleFileBasedBlockArchive::new(&c).await.unwrap();
-        let h = BlockHash::from_hex("00000000000000a86c0a6d7b3445ff9e64908d6417cd6b256dbc23efd01de26f").unwrap();
+        let h =
+            BlockHash::from_hex("00000000000000a86c0a6d7b3445ff9e64908d6417cd6b256dbc23efd01de26f")
+                .unwrap();
         let block = "This is a block".as_bytes().to_vec();
         let block_cursor = Box::new(Cursor::new(block.clone()));
-        archive.store_block(&h, &mut (block_cursor as Box<dyn AsyncRead + Unpin + Send>)).await.unwrap();
+        archive
+            .store_block(&h, &mut (block_cursor as Box<dyn AsyncRead + Unpin + Send>))
+            .await
+            .unwrap();
         let exists = archive.block_exists(&h).await.unwrap();
         assert!(exists);
         let block = "This is a new block".as_bytes().to_vec();
         let block_cursor = Box::new(Cursor::new(block.clone()));
-        let store = archive.store_block(&h, &mut (block_cursor as Box<dyn AsyncRead + Unpin + Send>)).await;
+        let store = archive
+            .store_block(&h, &mut (block_cursor as Box<dyn AsyncRead + Unpin + Send>))
+            .await;
         match store {
             Ok(_) => assert!(false),
-            Err(e) => {
-                match e {
-                    Error::BlockExists => assert!(true),
-                    _ => assert!(false)
-                }
-            }
+            Err(e) => match e {
+                Error::BlockExists => assert!(true),
+                _ => assert!(false),
+            },
         }
     }
 
@@ -383,7 +407,9 @@ mod tests {
     async fn test_block_size() {
         let c = get_testdata_config();
         let archive = SimpleFileBasedBlockArchive::new(&c).await.unwrap();
-        let h = BlockHash::from_hex("00000000000000a86c0a6d7b3445ff9e64908d6417cd6b256dbc23efd01de26f").unwrap();
+        let h =
+            BlockHash::from_hex("00000000000000a86c0a6d7b3445ff9e64908d6417cd6b256dbc23efd01de26f")
+                .unwrap();
         let size = archive.block_size(&h).await.unwrap();
         assert_eq!(size, 227);
     }
@@ -393,16 +419,16 @@ mod tests {
     async fn test_unknown_block_size() {
         let c = get_testdata_config();
         let archive = SimpleFileBasedBlockArchive::new(&c).await.unwrap();
-        let h = BlockHash::from_hex("0000000000000000094cc2ba6cc08514bcf9cbae26719d0a654a7754f3c75ef1").unwrap();
+        let h =
+            BlockHash::from_hex("0000000000000000094cc2ba6cc08514bcf9cbae26719d0a654a7754f3c75ef1")
+                .unwrap();
         let size = archive.block_size(&h).await;
         match size {
             Ok(_) => assert!(false),
-            Err(e) => {
-                match e {
-                    Error::BlockNotFound => assert!(true),
-                    _ => assert!(false)
-                }
-            }
+            Err(e) => match e {
+                Error::BlockNotFound => assert!(true),
+                _ => assert!(false),
+            },
         }
     }
 
@@ -411,11 +437,21 @@ mod tests {
     async fn test_block_header() {
         let c = get_testdata_config();
         let archive = SimpleFileBasedBlockArchive::new(&c).await.unwrap();
-        let h = BlockHash::from_hex("00000000000000a86c0a6d7b3445ff9e64908d6417cd6b256dbc23efd01de26f").unwrap();
+        let h =
+            BlockHash::from_hex("00000000000000a86c0a6d7b3445ff9e64908d6417cd6b256dbc23efd01de26f")
+                .unwrap();
         let header = archive.block_header(&h).await.unwrap();
         assert_eq!(header.version, 2);
-        assert_eq!(header.prev_hash, BlockHash::from_hex("0000000000000135aeabf9666fc9f1d5b8573685db070a5f1dfdd78f728a167a").unwrap());
-        assert_eq!(header.merkle_root, BlockHash::from_hex("949904a56c861ecde4b43c9fc4ad612b82d10e38bdd164ea820b8cd0e6a39178").unwrap());
+        assert_eq!(
+            header.prev_hash,
+            BlockHash::from_hex("0000000000000135aeabf9666fc9f1d5b8573685db070a5f1dfdd78f728a167a")
+                .unwrap()
+        );
+        assert_eq!(
+            header.merkle_root,
+            BlockHash::from_hex("949904a56c861ecde4b43c9fc4ad612b82d10e38bdd164ea820b8cd0e6a39178")
+                .unwrap()
+        );
     }
 
     // test getting a header for an unknown block
@@ -423,16 +459,16 @@ mod tests {
     async fn test_unknown_block_header() {
         let c = get_testdata_config();
         let archive = SimpleFileBasedBlockArchive::new(&c).await.unwrap();
-        let h = BlockHash::from_hex("0000000000000000094cc2ba6cc08514bcf9cbae26719d0a654a7754f3c75ef1").unwrap();
+        let h =
+            BlockHash::from_hex("0000000000000000094cc2ba6cc08514bcf9cbae26719d0a654a7754f3c75ef1")
+                .unwrap();
         let header = archive.block_header(&h).await;
         match header {
             Ok(_) => assert!(false),
-            Err(e) => {
-                match e {
-                    Error::BlockNotFound => assert!(true),
-                    _ => assert!(false)
-                }
-            }
+            Err(e) => match e {
+                Error::BlockNotFound => assert!(true),
+                _ => assert!(false),
+            },
         }
     }
 }

@@ -20,7 +20,7 @@ futures = "0.3.30"
 hex = "0.4.3"
 log = "0.4.20"
 
-bitcoinsv = "0.2.5"
+bitcoinsv = "0.2.7"
 bsvdb-base = { path = "../base" }
 
 [dev-dependencies]
