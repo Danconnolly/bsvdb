@@ -1,8 +1,7 @@
-use tokio::task::JoinError;
 use bsvdb_base::BsvDbBaseError;
 use bsvdb_blockarchive::Error as BlockArchiveError;
-use bsvdb_chainstore::ChainStoreError;
-
+use bsvdb_chainstore::Error;
+use tokio::task::JoinError;
 
 /// Standard Result used in the library
 pub type CliResult<T> = std::result::Result<T, CliError>;
@@ -12,7 +11,7 @@ pub type CliResult<T> = std::result::Result<T, CliError>;
 pub enum CliError {
     BsvDbBaseError(BsvDbBaseError),
     BlockArchiveError(BlockArchiveError),
-    ChainStoreError(ChainStoreError),
+    ChainStoreError(Error),
     JoinError(JoinError),
 }
 
@@ -34,13 +33,19 @@ impl From<BsvDbBaseError> for CliError {
 }
 
 impl From<BlockArchiveError> for CliError {
-    fn from(err: BlockArchiveError) -> CliError { CliError::BlockArchiveError(err) }
+    fn from(err: BlockArchiveError) -> CliError {
+        CliError::BlockArchiveError(err)
+    }
 }
 
-impl From<ChainStoreError> for CliError {
-    fn from(err: ChainStoreError) -> CliError { CliError::ChainStoreError(err) }
+impl From<Error> for CliError {
+    fn from(err: Error) -> CliError {
+        CliError::ChainStoreError(err)
+    }
 }
 
 impl From<JoinError> for CliError {
-    fn from(err: JoinError) -> CliError { CliError::JoinError(err) }
+    fn from(err: JoinError) -> CliError {
+        CliError::JoinError(err)
+    }
 }

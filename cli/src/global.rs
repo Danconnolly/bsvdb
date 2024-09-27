@@ -1,18 +1,16 @@
+use crate::result::CliResult;
+use bitcoinsv::bitcoin::{BlockHash, FullBlockStream};
+use bsvdb_base::BSVDBConfig;
+use bsvdb_blockarchive::{BlockArchive, SimpleFileBasedBlockArchive};
+use bsvdb_chainstore::Result;
+use bsvdb_chainstore::{BlockInfo, BlockValidity, ChainStore, FDBChainStore};
+use futures::StreamExt;
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::hash::Hash;
 use std::pin::Pin;
-use std::process::{id, Output};
 use std::time::Instant;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
-use bitcoinsv::bitcoin::{BlockHash, BlockHeader, FullBlockStream};
-use futures::StreamExt;
-use bsvdb_base::BSVDBConfig;
-use crate::result::CliResult;
-use bsvdb_blockarchive::{BlockArchive, SimpleFileBasedBlockArchive};
-use bsvdb_chainstore::{BlockInfo, BlockValidity, ChainStore, FDBChainStore};
-use bsvdb_chainstore::ChainStoreResult;
-use crate::ba::header;
 
 // synchronize chainstore from blockstore, multi-threaded approach
 pub async fn sync_piped(config: &BSVDBConfig) -> CliResult<()> {
@@ -52,28 +50,53 @@ pub async fn sync_piped(config: &BSVDBConfig) -> CliResult<()> {
     //          clear known_parent set
     //          wait for each storage task to complete, storing hash of block stored in known_parent set
 
-    const BUFFER_SIZE:usize = 1000;
+    const BUFFER_SIZE: usize = 1000;
 
-    type Stage1Result = (Pin<Box<dyn Future<Output=ChainStoreResult<std::option::Option<BlockInfo<<FDBChainStore as ChainStore>::BlockId>>>> + Send>>, BlockHash);
-    pub async fn stage1(block_hashes: Vec<BlockHash>, chain_store: FDBChainStore,
-                        sender: Sender<Stage1Result>) -> CliResult<()> {
+    type Stage1Result = (
+        Pin<
+            Box<
+                dyn Future<
+                        Output = Result<
+                            std::option::Option<BlockInfo<<FDBChainStore as ChainStore>::BlockId>>,
+                        >,
+                    > + Send,
+            >,
+        >,
+        BlockHash,
+    );
+    pub async fn stage1(
+        block_hashes: Vec<BlockHash>,
+        chain_store: FDBChainStore,
+        sender: Sender<Stage1Result>,
+    ) -> CliResult<()> {
         for block_hash in block_hashes {
             let j = chain_store.get_block_info_by_hash(block_hash);
-            sender.send((j, block_hash)).await.expect("TODO: panic message");
+            sender
+                .send((j, block_hash))
+                .await
+                .expect("TODO: panic message");
         }
         Ok(())
     }
 
     type Stage2Result = BlockInfo<<FDBChainStore as ChainStore>::BlockId>;
-    async fn stage2(mut receiver: Receiver<Stage1Result>, config: BSVDBConfig,
-                        sender: Sender<Stage2Result>) -> CliResult<()> {
+    async fn stage2(
+        mut receiver: Receiver<Stage1Result>,
+        config: BSVDBConfig,
+        sender: Sender<Stage2Result>,
+    ) -> CliResult<()> {
         // unfortunately we cant send futures for retrieving block data at the moment, so we have to do it in the foreground here
         let mut block_archive = SimpleFileBasedBlockArchive::new(&config.block_archive).await?;
         while let Some((j, block_hash)) = receiver.recv().await {
             let r = j.await.unwrap();
             if r.is_none() {
-                let r = block_archive.get_block(&block_hash).await.expect("get_block failed in stage2");
-                let it = FullBlockStream::new(r).await.expect("couldnt get block stream");
+                let r = block_archive
+                    .get_block(&block_hash)
+                    .await
+                    .expect("get_block failed in stage2");
+                let it = FullBlockStream::new(r)
+                    .await
+                    .expect("couldnt get block stream");
                 let b_info = BlockInfo {
                     id: 0u64,
                     hash: it.block_header.hash(),
@@ -97,18 +120,40 @@ pub async fn sync_piped(config: &BSVDBConfig) -> CliResult<()> {
     }
 
     type Stage3Result = BlockInfo<<FDBChainStore as ChainStore>::BlockId>;
-    async fn stage3(mut receiver: Receiver<Stage2Result>, config: BSVDBConfig, sender: Sender<Stage3Result>) -> CliResult<()> {
+    async fn stage3(
+        mut receiver: Receiver<Stage2Result>,
+        config: BSVDBConfig,
+        sender: Sender<Stage3Result>,
+    ) -> CliResult<()> {
         let mut block_archive = SimpleFileBasedBlockArchive::new(&config.block_archive).await?;
         while let Some(mut r) = receiver.recv().await {
-            let sz = block_archive.block_size(&r.hash).await.expect("get block size failed in stage3");
+            let sz = block_archive
+                .block_size(&r.hash)
+                .await
+                .expect("get block size failed in stage3");
             r.size = Some(sz as u64);
             sender.send(r).await.expect("msg sending failed in stage3");
         }
         Ok(())
     }
 
-    type Stage4Result = (BlockInfo<<FDBChainStore as ChainStore>::BlockId>, Pin<Box<dyn Future<Output=ChainStoreResult<std::option::Option<BlockInfo<<FDBChainStore as ChainStore>::BlockId>>>> + Send>>);
-    async fn stage4(mut receiver: Receiver<Stage3Result>, chain_store: FDBChainStore, sender: Sender<Stage4Result>) -> CliResult<()> {
+    type Stage4Result = (
+        BlockInfo<<FDBChainStore as ChainStore>::BlockId>,
+        Pin<
+            Box<
+                dyn Future<
+                        Output = Result<
+                            std::option::Option<BlockInfo<<FDBChainStore as ChainStore>::BlockId>>,
+                        >,
+                    > + Send,
+            >,
+        >,
+    );
+    async fn stage4(
+        mut receiver: Receiver<Stage3Result>,
+        chain_store: FDBChainStore,
+        sender: Sender<Stage4Result>,
+    ) -> CliResult<()> {
         while let Some(r) = receiver.recv().await {
             let f = chain_store.get_block_info_by_hash(r.header.prev_hash);
             sender.send((r, f)).await.expect("sending failed in stage4");
@@ -116,7 +161,11 @@ pub async fn sync_piped(config: &BSVDBConfig) -> CliResult<()> {
         Ok(())
     }
 
-    type Stage5Result = (BTreeMap<BlockHash, BlockInfo<<FDBChainStore as ChainStore>::BlockId>>, BTreeMap<BlockHash, Vec<BlockHash>>, BTreeSet<BlockHash>);
+    type Stage5Result = (
+        BTreeMap<BlockHash, BlockInfo<<FDBChainStore as ChainStore>::BlockId>>,
+        BTreeMap<BlockHash, Vec<BlockHash>>,
+        BTreeSet<BlockHash>,
+    );
     async fn stage5(mut receiver: Receiver<Stage4Result>) -> CliResult<Stage5Result> {
         let mut b_infos = BTreeMap::new();
         let mut parents_children = BTreeMap::new();
@@ -131,7 +180,7 @@ pub async fn sync_piped(config: &BSVDBConfig) -> CliResult<()> {
             match parents_children.get(&b_info.header.prev_hash) {
                 None => {
                     parents_children.insert(b_info.header.prev_hash, vec![b_info.hash]);
-                },
+                }
                 Some(v) => {
                     let mut v2 = v.clone();
                     v2.push(b_info.hash);
@@ -142,7 +191,11 @@ pub async fn sync_piped(config: &BSVDBConfig) -> CliResult<()> {
             found += 1;
             if found % 10_000 == 0 {
                 let dur = start_time.elapsed();
-                println!("found {} blocks, {} blocks/sec", found, (found as f32)/dur.as_secs_f32());
+                println!(
+                    "found {} blocks, {} blocks/sec",
+                    found,
+                    (found as f32) / dur.as_secs_f32()
+                );
             }
         }
         Ok((b_infos, parents_children, known_parents))
@@ -162,11 +215,12 @@ pub async fn sync_piped(config: &BSVDBConfig) -> CliResult<()> {
     }
     println!("done got {} hashes", block_hashes.len());
 
-    let (chain_store, _j_chain_store) = FDBChainStore::new(&config.chain_store, config.get_blockchain_id()).await?;
+    let (chain_store, _j_chain_store) =
+        FDBChainStore::new(&config.chain_store, config.get_blockchain_id()).await?;
     let (sender, mut receiver) = channel(BUFFER_SIZE);
     let f_stage1 = stage1(block_hashes, chain_store.clone(), sender);
     let j_stage1 = tokio::spawn(f_stage1);
-    
+
     let (s2, r2) = channel(BUFFER_SIZE);
     let c = (*config).clone();
     let f_stage2 = stage2(receiver, c, s2);
@@ -189,7 +243,11 @@ pub async fn sync_piped(config: &BSVDBConfig) -> CliResult<()> {
     j_stage4.await?;
 
     let (mut block_infos, mut parent_children, mut known_parents) = j_stage5.await?.unwrap();
-    println!("found {} new headers, with {} known parents", block_infos.len(), known_parents.len());
+    println!(
+        "found {} new headers, with {} known parents",
+        block_infos.len(),
+        known_parents.len()
+    );
 
     let mut added = 0;
     while known_parents.len() > 0 {

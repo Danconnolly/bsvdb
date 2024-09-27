@@ -1,4 +1,4 @@
-use crate::ChainStoreResult;
+use crate::Result;
 use async_trait::async_trait;
 use bitcoinsv::bitcoin::{BlockHash, BlockHeader, BlockchainId};
 use futures::Stream;
@@ -33,7 +33,7 @@ pub trait ChainStore {
     /// Returns the current state of the blockchain.
     fn get_chain_state(
         &self,
-    ) -> impl Future<Output = ChainStoreResult<ChainState<<Self as ChainStore>::BlockId>>> + Send;
+    ) -> impl Future<Output = Result<ChainState<<Self as ChainStore>::BlockId>>> + Send;
 
     /// Get the block info for the block with the given id.
     ///
@@ -41,13 +41,13 @@ pub trait ChainStore {
     fn get_block_info(
         &self,
         db_id: Self::BlockId,
-    ) -> impl Future<Output = ChainStoreResult<Option<BlockInfo<Self::BlockId>>>> + Send;
+    ) -> impl Future<Output = Result<Option<BlockInfo<Self::BlockId>>>> + Send;
 
     /// Returns the block info for the block with the given hash.
     fn get_block_info_by_hash(
         &self,
         hash: BlockHash,
-    ) -> impl Future<Output = ChainStoreResult<Option<BlockInfo<Self::BlockId>>>> + Send;
+    ) -> impl Future<Output = Result<Option<BlockInfo<Self::BlockId>>>> + Send;
 
     /// Returns the block infos for the block and its ancestors.
     ///
@@ -57,7 +57,7 @@ pub trait ChainStore {
         &self,
         db_id: Self::BlockId,
         max_blocks: Option<u64>,
-    ) -> ChainStoreResult<impl BlockInfoStream<Self::BlockId>>;
+    ) -> Result<impl BlockInfoStream<Self::BlockId>>;
 
     /// Store the block info in the ChainStore, returning an updated BlockInfo structure and updating
     /// the ChainState as required.
@@ -88,7 +88,7 @@ pub trait ChainStore {
     fn store_block_info(
         &self,
         block_info: BlockInfo<Self::BlockId>,
-    ) -> impl Future<Output = ChainStoreResult<BlockInfo<Self::BlockId>>> + Send;
+    ) -> impl Future<Output = Result<BlockInfo<Self::BlockId>>> + Send;
 }
 
 /// The BlockValidity enum describes the validity of a block.

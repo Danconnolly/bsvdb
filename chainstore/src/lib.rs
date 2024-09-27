@@ -1,9 +1,9 @@
 #![feature(async_closure)]
 
 mod chain_store;
-mod result;
 mod fdb_chain_store;
+mod result;
 
-pub use chain_store::{ChainStore, BlockInfo, BlockValidity};
-pub use result::{ChainStoreResult, ChainStoreError};
+pub use chain_store::{BlockInfo, BlockValidity, ChainStore};
 pub use fdb_chain_store::FDBChainStore;
+pub use result::{Error, Result};

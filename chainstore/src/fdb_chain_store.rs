@@ -1,5 +1,5 @@
 use crate::chain_store::{BlockInfoStream, BlockInfoStreamFromChannel, ChainState};
-use crate::{BlockInfo, BlockValidity, ChainStore, ChainStoreError, ChainStoreResult};
+use crate::{BlockInfo, BlockValidity, ChainStore, Error, Result};
 use async_trait::async_trait;
 use bitcoinsv::bitcoin::{AsyncEncodable, BlockHash, BlockHeader, BlockchainId, Encodable};
 use bsvdb_base::ChainStoreConfig;
@@ -40,7 +40,7 @@ impl FDBChainStore {
     pub async fn new(
         config: &ChainStoreConfig,
         chain: BlockchainId,
-    ) -> ChainStoreResult<(Self, JoinHandle<()>)> {
+    ) -> Result<(Self, JoinHandle<()>)> {
         let (tx, rx) = channel(1_000);
         let mut actor = FDBChainStoreActor::new(config, chain, rx).await?;
         let j = tokio::spawn(async move { actor.run().await });
@@ -48,15 +48,15 @@ impl FDBChainStore {
     }
 
     /// Shutdown the FDBChainStore, cleaning up and terminating background processes.
-    pub async fn shutdown(&self) -> ChainStoreResult<()> {
+    pub async fn shutdown(&self) -> Result<()> {
         let (tx, rx) = oneshot_channel();
         self.sender
             .send((FDBChainStoreMessage::Shutdown, tx))
             .await
-            .map_err(|e| ChainStoreError::SendError(format!("{}", e)))?;
+            .map_err(|e| Error::SendError(format!("{}", e)))?;
         match rx.await {
             Ok(_) => Ok(()),
-            Err(e) => Err(ChainStoreError::from(e)),
+            Err(e) => Err(Error::from(e)),
         }
     }
 }
@@ -67,24 +67,19 @@ impl ChainStore for FDBChainStore {
 
     fn get_chain_state(
         &self,
-    ) -> Pin<
-        Box<
-            dyn Future<Output = ChainStoreResult<ChainState<<Self as ChainStore>::BlockId>>> + Send,
-        >,
-    > {
+    ) -> Pin<Box<dyn Future<Output = Result<ChainState<<Self as ChainStore>::BlockId>>> + Send>>
+    {
         let sender = self.sender.clone();
         Box::pin(async move {
             let (tx, rx) = oneshot_channel();
             sender
                 .send((FDBChainStoreMessage::ChainState, tx))
                 .await
-                .map_err(|e| ChainStoreError::SendError(format!("{}", e)))?;
+                .map_err(|e| Error::SendError(format!("{}", e)))?;
             match rx.await {
                 Ok(FDBChainStoreReply::ChainStateReply(s)) => Ok(s),
-                Ok(_) => Err(ChainStoreError::Internal(
-                    "received unexpected reply".into(),
-                )),
-                Err(e) => Err(ChainStoreError::from(e)),
+                Ok(_) => Err(Error::Internal("received unexpected reply".into())),
+                Err(e) => Err(Error::from(e)),
             }
         })
     }
@@ -93,10 +88,7 @@ impl ChainStore for FDBChainStore {
         &self,
         db_id: Self::BlockId,
     ) -> Pin<
-        Box<
-            dyn Future<Output = ChainStoreResult<Option<BlockInfo<<Self as ChainStore>::BlockId>>>>
-                + Send,
-        >,
+        Box<dyn Future<Output = Result<Option<BlockInfo<<Self as ChainStore>::BlockId>>>> + Send>,
     > {
         let sender = self.sender.clone();
         Box::pin(async move {
@@ -104,13 +96,11 @@ impl ChainStore for FDBChainStore {
             sender
                 .send((FDBChainStoreMessage::BlockInfo(db_id), tx))
                 .await
-                .map_err(|e| ChainStoreError::SendError(format!("{}", e)))?;
+                .map_err(|e| Error::SendError(format!("{}", e)))?;
             match rx.await {
                 Ok(FDBChainStoreReply::BlockInfoReply(r)) => Ok(r),
-                Ok(_) => Err(ChainStoreError::Internal(
-                    "received unexpected reply".into(),
-                )),
-                Err(e) => Err(ChainStoreError::from(e)),
+                Ok(_) => Err(Error::Internal("received unexpected reply".into())),
+                Err(e) => Err(Error::from(e)),
             }
         })
     }
@@ -119,10 +109,7 @@ impl ChainStore for FDBChainStore {
         &self,
         block_hash: BlockHash,
     ) -> Pin<
-        Box<
-            dyn Future<Output = ChainStoreResult<Option<BlockInfo<<Self as ChainStore>::BlockId>>>>
-                + Send,
-        >,
+        Box<dyn Future<Output = Result<Option<BlockInfo<<Self as ChainStore>::BlockId>>>> + Send>,
     > {
         let sender = self.sender.clone();
         Box::pin(async move {
@@ -130,13 +117,11 @@ impl ChainStore for FDBChainStore {
             sender
                 .send((FDBChainStoreMessage::BlockInfoByHash(block_hash), tx))
                 .await
-                .map_err(|e| ChainStoreError::SendError(format!("{}", e)))?;
+                .map_err(|e| Error::SendError(format!("{}", e)))?;
             match rx.await {
                 Ok(FDBChainStoreReply::BlockInfoReply(r)) => Ok(r),
-                Ok(_) => Err(ChainStoreError::Internal(
-                    "received unexpected reply".into(),
-                )),
-                Err(e) => Err(ChainStoreError::from(e)),
+                Ok(_) => Err(Error::Internal("received unexpected reply".into())),
+                Err(e) => Err(Error::from(e)),
             }
         })
     }
@@ -152,7 +137,7 @@ impl ChainStore for FDBChainStore {
         &self,
         db_id: Self::BlockId,
         max_blocks: Option<u64>,
-    ) -> ChainStoreResult<BlockInfoStreamFromChannel<Self::BlockId>> {
+    ) -> Result<BlockInfoStreamFromChannel<Self::BlockId>> {
         let sender = self.sender.clone();
         let (tx, rx) = oneshot_channel();
         let (r_tx, r_rx) = channel(1000);
@@ -162,16 +147,14 @@ impl ChainStore for FDBChainStore {
                 tx,
             ))
             .await
-            .map_err(|e| ChainStoreError::SendError(format!("{}", e)))?;
+            .map_err(|e| Error::SendError(format!("{}", e)))?;
         match rx.await {
             Ok(FDBChainStoreReply::BlockInfosReply) => {
                 let r = BlockInfoStreamFromChannel::new(r_rx);
                 Ok(r)
             }
-            Ok(_) => Err(ChainStoreError::Internal(
-                "received unexpected reply".into(),
-            )),
-            Err(e) => Err(ChainStoreError::from(e)),
+            Ok(_) => Err(Error::Internal("received unexpected reply".into())),
+            Err(e) => Err(Error::from(e)),
         }
     }
 
@@ -184,20 +167,18 @@ impl ChainStore for FDBChainStore {
     fn store_block_info(
         &self,
         block_info: BlockInfo<Self::BlockId>,
-    ) -> Pin<Box<dyn Future<Output = ChainStoreResult<BlockInfo<Self::BlockId>>> + Send>> {
+    ) -> Pin<Box<dyn Future<Output = Result<BlockInfo<Self::BlockId>>> + Send>> {
         let sender = self.sender.clone();
         Box::pin(async move {
             let (tx, rx) = oneshot_channel();
             sender
                 .send((FDBChainStoreMessage::StoreBlockInfo(block_info), tx))
                 .await
-                .map_err(|e| ChainStoreError::SendError(format!("{}", e)))?;
+                .map_err(|e| Error::SendError(format!("{}", e)))?;
             match rx.await {
                 Ok(FDBChainStoreReply::BlockInfoReply(Some(r))) => Ok(r),
-                Ok(_) => Err(ChainStoreError::Internal(
-                    "received unexpected reply".into(),
-                )),
-                Err(e) => Err(ChainStoreError::from(e)),
+                Ok(_) => Err(Error::Internal("received unexpected reply".into())),
+                Err(e) => Err(Error::from(e)),
             }
         })
     }
@@ -260,7 +241,7 @@ impl FDBChainStoreActor {
         config: &ChainStoreConfig,
         chain: BlockchainId,
         receiver: Receiver<(FDBChainStoreMessage, OneshotSender<FDBChainStoreReply>)>,
-    ) -> ChainStoreResult<FDBChainStoreActor> {
+    ) -> Result<FDBChainStoreActor> {
         let root_dir: Vec<String> = config
             .root_path
             .split('/')
@@ -301,7 +282,7 @@ impl FDBChainStoreActor {
         info_dir: DirectoryOutput,
         h_index_dir: &DirectoryOutput,
         chain: BlockchainId,
-    ) -> ChainStoreResult<()> {
+    ) -> Result<()> {
         let trx = db.create_trx()?;
         let state_key = Self::get_state_key(chain_dir).unwrap();
         let v = trx.get(&*state_key, false).await?;
@@ -335,7 +316,7 @@ impl FDBChainStoreActor {
     }
 
     // get the key for the state
-    fn get_state_key(chain_dir: &DirectoryOutput) -> ChainStoreResult<Vec<u8>> {
+    fn get_state_key(chain_dir: &DirectoryOutput) -> Result<Vec<u8>> {
         Ok(chain_dir.pack(&Self::STATE_KEY)?)
     }
 
@@ -384,7 +365,7 @@ impl FDBChainStoreActor {
     }
 
     // get the key for the next_id
-    fn get_next_id_key(chain_dir: &DirectoryOutput) -> ChainStoreResult<Vec<u8>> {
+    fn get_next_id_key(chain_dir: &DirectoryOutput) -> Result<Vec<u8>> {
         Ok(chain_dir.pack(&Self::NEXT_ID_KEY)?)
     }
 
@@ -403,7 +384,7 @@ impl FDBChainStoreActor {
     fn get_block_info_key(
         info_dir: &DirectoryOutput,
         block_id: <FDBChainStore as ChainStore>::BlockId,
-    ) -> ChainStoreResult<Vec<u8>> {
+    ) -> Result<Vec<u8>> {
         Ok(info_dir.pack(&block_id)?)
     }
 
@@ -486,10 +467,7 @@ impl FDBChainStoreActor {
     }
 
     // get the key for the hash index
-    fn get_h_index_key(
-        h_index_dir: &DirectoryOutput,
-        block_hash: &BlockHash,
-    ) -> ChainStoreResult<Vec<u8>> {
+    fn get_h_index_key(h_index_dir: &DirectoryOutput, block_hash: &BlockHash) -> Result<Vec<u8>> {
         Ok(h_index_dir.pack(&block_hash.to_binary_buf().unwrap())?)
     }
 
@@ -509,7 +487,7 @@ impl FDBChainStoreActor {
         trx: &Transaction,
         block_hash: &BlockHash,
         h_index_dir: &DirectoryOutput,
-    ) -> ChainStoreResult<Option<<FDBChainStore as ChainStore>::BlockId>> {
+    ) -> Result<Option<<FDBChainStore as ChainStore>::BlockId>> {
         let k = Self::get_h_index_key(h_index_dir, block_hash)?;
         let v = trx.get(k.as_slice(), false).await?;
         if v.is_none() {
@@ -523,7 +501,7 @@ impl FDBChainStoreActor {
         trx: &Transaction,
         next_id: &Mutex<u8>,
         chain_dir: &DirectoryOutput,
-    ) -> ChainStoreResult<<FDBChainStore as ChainStore>::BlockId> {
+    ) -> Result<<FDBChainStore as ChainStore>::BlockId> {
         // only do one of these at a time to prevent db transaction clashes
         let k = Self::get_next_id_key(chain_dir).unwrap();
         let _lck = next_id.lock().await;
@@ -538,7 +516,7 @@ impl FDBChainStoreActor {
     async fn handle_get_chain_state(
         &self,
         reply: OneshotSender<FDBChainStoreReply>,
-    ) -> ChainStoreResult<JoinHandle<()>> {
+    ) -> Result<JoinHandle<()>> {
         let k = Self::get_state_key(&self.chain_dir)?;
         let trx = self.db.create_trx()?;
         Ok(tokio::spawn(async move {
@@ -558,7 +536,7 @@ impl FDBChainStoreActor {
         &self,
         db_id: <FDBChainStore as ChainStore>::BlockId,
         reply: OneshotSender<FDBChainStoreReply>,
-    ) -> ChainStoreResult<JoinHandle<()>> {
+    ) -> Result<JoinHandle<()>> {
         let k = Self::get_block_info_key(&self.infos_dir, db_id)?;
         let trx = self.db.create_trx()?;
         Ok(tokio::spawn(async move {
@@ -580,7 +558,7 @@ impl FDBChainStoreActor {
         hash: &BlockHash,
         h_index_dir: &DirectoryOutput,
         infos_dir: &DirectoryOutput,
-    ) -> ChainStoreResult<Option<BlockInfo<<FDBChainStore as ChainStore>::BlockId>>> {
+    ) -> Result<Option<BlockInfo<<FDBChainStore as ChainStore>::BlockId>>> {
         match Self::get_block_id_from_hash(trx, hash, h_index_dir).await? {
             None => Ok(None),
             Some(id) => {
@@ -599,7 +577,7 @@ impl FDBChainStoreActor {
         &self,
         hash: BlockHash,
         reply: OneshotSender<FDBChainStoreReply>,
-    ) -> ChainStoreResult<JoinHandle<()>> {
+    ) -> Result<JoinHandle<()>> {
         let trx = self.db.create_trx()?;
         let h_index_dir = self.h_index_dir.clone();
         let infos_dir = self.infos_dir.clone();
@@ -623,7 +601,7 @@ impl FDBChainStoreActor {
         max_blocks: Option<u64>,
         tx: Sender<BlockInfo<<FDBChainStore as ChainStore>::BlockId>>,
         reply: OneshotSender<FDBChainStoreReply>,
-    ) -> ChainStoreResult<JoinHandle<()>> {
+    ) -> Result<JoinHandle<()>> {
         let infos_dir = self.infos_dir.clone();
         let mut trx = self.db.create_trx().unwrap();
         let num_blocks = max_blocks.unwrap_or(u64::MAX);
@@ -668,7 +646,7 @@ impl FDBChainStoreActor {
         &self,
         mut block_info: BlockInfo<<FDBChainStore as ChainStore>::BlockId>,
         reply: OneshotSender<FDBChainStoreReply>,
-    ) -> ChainStoreResult<JoinHandle<()>> {
+    ) -> Result<JoinHandle<()>> {
         let trx = self.db.create_trx()?;
         let h_index_dir = self.h_index_dir.clone();
         let chain_dir = self.chain_dir.clone();
