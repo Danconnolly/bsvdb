@@ -1,4 +1,5 @@
 use crate::chain_store::{BlockInfoStream, BlockInfoStreamFromChannel, ChainState};
+use crate::result::InternalError;
 use crate::{BlockInfo, BlockValidity, ChainStore, Error, Result};
 use async_trait::async_trait;
 use bitcoinsv::bitcoin::{AsyncEncodable, BlockHash, BlockHeader, BlockchainId, Encodable};
@@ -7,6 +8,7 @@ use foundationdb::directory::{Directory, DirectoryOutput};
 use foundationdb::tuple::{pack, unpack, Bytes, Element};
 use foundationdb::Transaction;
 use futures::Stream;
+use minactor::{create_actor, Actor, ActorRef, Control};
 use std::borrow::Cow;
 use std::future::Future;
 use std::pin::Pin;
@@ -26,9 +28,14 @@ use tokio::time::sleep;
 ///
 /// It uses the foundationdb tuple encoding so that the database can be read by multiple
 /// languages.
+// Development notes:
+//  A critical feature for the ChainStore is the ability to execute many database operations
+//  simultaneously. It must not be the case that operations are performed sequentially, where
+//  one operation must complete before the next one is started.
 #[derive(Clone)]
 pub struct FDBChainStore {
-    sender: Sender<(FDBChainStoreMessage, OneshotSender<FDBChainStoreReply>)>,
+    /// Reference to the actor.
+    actor_ref: ActorRef<FDBChainStoreActor>,
 }
 
 impl FDBChainStore {
@@ -41,23 +48,14 @@ impl FDBChainStore {
         config: &ChainStoreConfig,
         chain: BlockchainId,
     ) -> Result<(Self, JoinHandle<()>)> {
-        let (tx, rx) = channel(1_000);
-        let mut actor = FDBChainStoreActor::new(config, chain, rx).await?;
-        let j = tokio::spawn(async move { actor.run().await });
-        Ok((FDBChainStore { sender: tx }, j))
+        let actor = FDBChainStoreActor::new(config, chain).await?;
+        let (a_ref, j) = create_actor(actor).await.unwrap();
+        Ok((FDBChainStore { actor_ref: a_ref }, j))
     }
 
     /// Shutdown the FDBChainStore, cleaning up and terminating background processes.
     pub async fn shutdown(&self) -> Result<()> {
-        let (tx, rx) = oneshot_channel();
-        self.sender
-            .send((FDBChainStoreMessage::Shutdown, tx))
-            .await
-            .map_err(|e| Error::SendError(format!("{}", e)))?;
-        match rx.await {
-            Ok(_) => Ok(()),
-            Err(e) => Err(Error::from(e)),
-        }
+        self.actor_ref.shutdown()
     }
 }
 
@@ -65,36 +63,30 @@ impl FDBChainStore {
 impl ChainStore for FDBChainStore {
     type BlockId = u64;
 
-    fn get_chain_state(
-        &self,
-    ) -> Pin<Box<dyn Future<Output = Result<ChainState<<Self as ChainStore>::BlockId>>> + Send>>
-    {
-        let sender = self.sender.clone();
-        Box::pin(async move {
-            let (tx, rx) = oneshot_channel();
-            sender
-                .send((FDBChainStoreMessage::ChainState, tx))
-                .await
-                .map_err(|e| Error::SendError(format!("{}", e)))?;
-            match rx.await {
-                Ok(FDBChainStoreReply::ChainStateReply(s)) => Ok(s),
-                Ok(_) => Err(Error::Internal("received unexpected reply".into())),
-                Err(e) => Err(Error::from(e)),
+    async fn get_chain_state(&self) -> Result<ChainState<<Self as ChainStore>::BlockId>> {
+        let r = self
+            .actor_ref
+            .call(FDBChainStoreCallMessage::GetChainState)
+            .await?;
+        if r.is_err() {
+            Err(Error::Internal("failed to get chain state".into()))
+        } else {
+            match r.unwrap() {
+                FDBChainStoreCallMessage::ChainStateReply(s) => Ok(s),
+                _ => panic!("unexpected reply message received"),
             }
-        })
+        }
     }
 
-    fn get_block_info(
+    async fn get_block_info(
         &self,
         db_id: Self::BlockId,
-    ) -> Pin<
-        Box<dyn Future<Output = Result<Option<BlockInfo<<Self as ChainStore>::BlockId>>>> + Send>,
-    > {
+    ) -> Result<Option<BlockInfo<<Self as ChainStore>::BlockId>>> {
         let sender = self.sender.clone();
         Box::pin(async move {
             let (tx, rx) = oneshot_channel();
             sender
-                .send((FDBChainStoreMessage::BlockInfo(db_id), tx))
+                .send((FDBChainStoreSendMessage::BlockInfo(db_id), tx))
                 .await
                 .map_err(|e| Error::SendError(format!("{}", e)))?;
             match rx.await {
@@ -115,7 +107,7 @@ impl ChainStore for FDBChainStore {
         Box::pin(async move {
             let (tx, rx) = oneshot_channel();
             sender
-                .send((FDBChainStoreMessage::BlockInfoByHash(block_hash), tx))
+                .send((FDBChainStoreSendMessage::BlockInfoByHash(block_hash), tx))
                 .await
                 .map_err(|e| Error::SendError(format!("{}", e)))?;
             match rx.await {
@@ -143,7 +135,7 @@ impl ChainStore for FDBChainStore {
         let (r_tx, r_rx) = channel(1000);
         sender
             .send((
-                FDBChainStoreMessage::BlockInfos(db_id, max_blocks, r_tx),
+                FDBChainStoreSendMessage::BlockInfos(db_id, max_blocks, r_tx),
                 tx,
             ))
             .await
@@ -172,7 +164,7 @@ impl ChainStore for FDBChainStore {
         Box::pin(async move {
             let (tx, rx) = oneshot_channel();
             sender
-                .send((FDBChainStoreMessage::StoreBlockInfo(block_info), tx))
+                .send((FDBChainStoreSendMessage::StoreBlockInfo(block_info), tx))
                 .await
                 .map_err(|e| Error::SendError(format!("{}", e)))?;
             match rx.await {
@@ -184,9 +176,9 @@ impl ChainStore for FDBChainStore {
     }
 }
 
-#[derive(Debug)]
-enum FDBChainStoreMessage {
-    ChainState,
+/// The messages used for send calls to the actor.
+#[derive(Debug, Clone)]
+enum FDBChainStoreSendMessage {
     BlockInfo(<FDBChainStore as ChainStore>::BlockId),
     BlockInfoByHash(BlockHash),
     BlockInfos(
@@ -198,9 +190,15 @@ enum FDBChainStoreMessage {
     Shutdown,
 }
 
+/// The messages used for calls to the actor.
+#[derive(Debug, Clone)]
+enum FDBChainStoreCallMessage {
+    GetChainState,
+    ChainStateReply(ChainState<<FDBChainStore as ChainStore>::BlockId>),
+}
+
 #[derive(Debug)]
 enum FDBChainStoreReply {
-    ChainStateReply(ChainState<<FDBChainStore as ChainStore>::BlockId>),
     BlockInfoReply(Option<BlockInfo<<FDBChainStore as ChainStore>::BlockId>>),
     BlockInfosReply,
     Done,
@@ -210,7 +208,7 @@ enum FDBChainStoreReply {
 ///
 /// todo: update to use minactor
 struct FDBChainStoreActor {
-    receiver: Receiver<(FDBChainStoreMessage, OneshotSender<FDBChainStoreReply>)>,
+    receiver: Receiver<(FDBChainStoreSendMessage, OneshotSender<FDBChainStoreReply>)>,
     db: foundationdb::Database,
     // root directory for chainstore
     chain_dir: DirectoryOutput,
@@ -240,7 +238,7 @@ impl FDBChainStoreActor {
     pub async fn new(
         config: &ChainStoreConfig,
         chain: BlockchainId,
-        receiver: Receiver<(FDBChainStoreMessage, OneshotSender<FDBChainStoreReply>)>,
+        receiver: Receiver<(FDBChainStoreSendMessage, OneshotSender<FDBChainStoreReply>)>,
     ) -> Result<FDBChainStoreActor> {
         let root_dir: Vec<String> = config
             .root_path
@@ -738,27 +736,27 @@ impl FDBChainStoreActor {
             tokio::select! {
                 Some((msg, reply)) = self.receiver.recv() => {
                     match msg {
-                        FDBChainStoreMessage::ChainState => {
+                        FDBChainStoreSendMessage::ChainState => {
                             let j = self.handle_get_chain_state(reply).await.unwrap();
                             tasks.push(j);
                         },
-                        FDBChainStoreMessage::BlockInfo(db_id) => {
+                        FDBChainStoreSendMessage::BlockInfo(db_id) => {
                             let j = self.get_block_info(db_id, reply).await.unwrap();
                             tasks.push(j);
                         },
-                        FDBChainStoreMessage::BlockInfoByHash(block_hash) => {
+                        FDBChainStoreSendMessage::BlockInfoByHash(block_hash) => {
                             let j = self.get_block_info_by_hash(block_hash, reply).await.unwrap();
                             tasks.push(j);
                         },
-                        FDBChainStoreMessage::BlockInfos(block_id, max_blocks, r_tx) => {
+                        FDBChainStoreSendMessage::BlockInfos(block_id, max_blocks, r_tx) => {
                             let j = self.get_block_infos(block_id, max_blocks, r_tx, reply).await.unwrap();
                             tasks.push(j);
                         },
-                        FDBChainStoreMessage::StoreBlockInfo(block_info) => {
+                        FDBChainStoreSendMessage::StoreBlockInfo(block_info) => {
                             let j = self.store_block_info(block_info, reply).await.unwrap();
                             tasks.push(j);
                         },
-                        FDBChainStoreMessage::Shutdown => {
+                        FDBChainStoreSendMessage::Shutdown => {
                             reply.send(FDBChainStoreReply::Done).expect("unexpected failure shutting down");
                             break;
                         }
@@ -774,6 +772,39 @@ impl FDBChainStoreActor {
             //
             // }
         }
+    }
+}
+
+impl Actor for FDBChainStoreActor {
+    type SendMessage = FDBChainStoreSendMessage;
+    type CallMessage = FDBChainStoreCallMessage;
+    type ErrorType = InternalError;
+
+    fn on_initialization(
+        &mut self,
+        self_ref: ActorRef<Self>,
+    ) -> impl Future<Output = Control> + Send {
+        todo!()
+    }
+
+    fn handle_sends(&mut self, msg: Self::SendMessage) -> impl Future<Output = Control> + Send {
+        todo!()
+    }
+
+    fn handle_calls(
+        &mut self,
+        msg: Self::CallMessage,
+    ) -> impl Future<
+        Output = (
+            Control,
+            std::result::Result<Self::CallMessage, Self::ErrorType>,
+        ),
+    > + Send {
+        todo!()
+    }
+
+    fn on_shutdown(&mut self) -> impl Future<Output = Control> + Send {
+        todo!()
     }
 }
 

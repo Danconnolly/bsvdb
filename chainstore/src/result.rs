@@ -26,6 +26,7 @@ pub enum Error {
     FdbDirectoryError(DirectoryError),
     FdbTransactionCommitError(TransactionCommitError),
     OneshotRecvError(RecvError),
+    MinactorError(minactor::Error),
 }
 
 impl std::fmt::Display for Error {
@@ -45,6 +46,7 @@ impl std::fmt::Display for Error {
                 write!(f, "FBD Transaction Commit Error: {}", err)
             }
             Error::OneshotRecvError(err) => write!(f, "Oneshot receiver error: {}", err),
+            Error::MinactorError(err) => write!(f, "minactor error: {}", err),
         }
     }
 }
@@ -90,3 +92,13 @@ impl From<RecvError> for Error {
         Error::OneshotRecvError(err)
     }
 }
+
+impl From<minactor::Error> for Error {
+    fn from(value: minactor::Error) -> Self {
+        Error::MinactorError(value)
+    }
+}
+
+/// Internal error type.
+#[derive(Clone, Debug)]
+pub enum InternalError {}

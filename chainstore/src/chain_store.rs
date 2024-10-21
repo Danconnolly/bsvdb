@@ -2,7 +2,6 @@ use crate::Result;
 use async_trait::async_trait;
 use bitcoinsv::bitcoin::{BlockHash, BlockHeader, BlockchainId};
 use futures::Stream;
-use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use tokio::sync::mpsc::Receiver;
@@ -31,23 +30,21 @@ pub trait ChainStore {
     type BlockId;
 
     /// Returns the current state of the blockchain.
-    fn get_chain_state(
-        &self,
-    ) -> impl Future<Output = Result<ChainState<<Self as ChainStore>::BlockId>>> + Send;
+    async fn get_chain_state(&self) -> Result<ChainState<Self::BlockId>>;
 
     /// Get the block info for the block with the given id.
     ///
     /// Returns a future that will produce the results.
-    fn get_block_info(
+    async fn get_block_info(
         &self,
         db_id: Self::BlockId,
-    ) -> impl Future<Output = Result<Option<BlockInfo<Self::BlockId>>>> + Send;
+    ) -> Result<Option<BlockInfo<Self::BlockId>>>;
 
     /// Returns the block info for the block with the given hash.
-    fn get_block_info_by_hash(
+    async fn get_block_info_by_hash(
         &self,
         hash: BlockHash,
-    ) -> impl Future<Output = Result<Option<BlockInfo<Self::BlockId>>>> + Send;
+    ) -> Result<Option<BlockInfo<Self::BlockId>>>;
 
     /// Returns the block infos for the block and its ancestors.
     ///
@@ -85,10 +82,10 @@ pub trait ChainStore {
     ///
     /// If the validity of the parent block is HeaderInvalid, then the validity of the child block is
     /// InvalidAncestor.
-    fn store_block_info(
+    async fn store_block_info(
         &self,
         block_info: BlockInfo<Self::BlockId>,
-    ) -> impl Future<Output = Result<BlockInfo<Self::BlockId>>> + Send;
+    ) -> Result<BlockInfo<Self::BlockId>>;
 }
 
 /// The BlockValidity enum describes the validity of a block.
