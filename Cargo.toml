@@ -2,7 +2,7 @@
 members = [
     "base",
     "blockarchive",
-    "chainstore",
+    #    "chainstore",      todo: need to work on blockarchive
     "cli",
 ]
 resolver = "2"
