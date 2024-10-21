@@ -1,7 +1,7 @@
 use crate::block_archive::{BlockHashListStream, BlockHashListStreamFromChannel};
 use crate::{BlockArchive, Error, Result};
 use async_trait::async_trait;
-use bitcoinsv::bitcoin::{AsyncEncodable, BlockHash, BlockHeader, Encodable};
+use bitcoinsv::bitcoin::{AsyncEncodable, BlockHash, BlockHeader};
 use bsvdb_base::BlockArchiveConfig;
 use hex::{FromHex, ToHex};
 use std::path::PathBuf;
