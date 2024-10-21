@@ -1,14 +1,16 @@
-mod result;
 mod ba;
-mod global;
+mod chk_links;
 mod cs;
+mod global;
+mod result;
 
-use bitcoinsv::bitcoin::BlockHash;
-use clap::{Parser, Subcommand};
-use bsvdb_base::{BSVDBConfig};
-use crate::ba::{check_all_blocks, check_block, check_links, header, list_blocks, rpc_import};
+use crate::ba::{check_all_blocks, check_block, header, list_blocks, rpc_import};
+use crate::chk_links::check_links;
 use crate::cs::{cs_list_blocks, get_block_info};
-use crate::global::{sync_piped};
+use crate::global::sync_piped;
+use bitcoinsv::bitcoin::BlockHash;
+use bsvdb_base::BSVDBConfig;
+use clap::{Parser, Subcommand};
 
 /// A CLI for managing bsvdb components and systems.
 #[derive(Parser, Debug)]
@@ -30,15 +32,17 @@ enum CommandOrSystem {
     /// Block Archive commands.
     BA {
         #[command(subcommand)]
-        ba_cmd: BACommands
+        ba_cmd: BACommands,
     },
     /// Chain Store commands.
     CS {
         #[command(subcommand)]
-        cs_cmd: CSCommands
+        cs_cmd: CSCommands,
     },
     /// Synchronize system.
-    #[clap(long_about = "synchronizes data between various components, such as importing blocks from blockstore to chainstore.")]
+    #[clap(
+        long_about = "synchronizes data between various components, such as importing blocks from blockstore to chainstore."
+    )]
     Sync,
 }
 
@@ -98,7 +102,7 @@ enum BAImportCommands {
         ///
         /// URI should be something like 'http://username:password@127.0.0.1:8332'
         rpc_uri: String,
-    }
+    },
 }
 
 /// Chain Store commands.
@@ -113,7 +117,7 @@ enum CSCommands {
     List {
         /// Block ID
         block_id: u64,
-    }
+    },
 }
 
 #[tokio::main]
@@ -121,43 +125,39 @@ async fn main() {
     let args: Args = Args::parse();
     let config = BSVDBConfig::new(args.config).unwrap();
     match args.cmd {
-        CommandOrSystem::BA{ba_cmd} => {
-            if ! config.block_archive.enabled {
+        CommandOrSystem::BA { ba_cmd } => {
+            if !config.block_archive.enabled {
                 println!("BlockArchive is not enabled.");
                 return;
             }
             let ba_config = config.block_archive;
             match ba_cmd {
-                BACommands::Check{check_cmd} => {
-                    match check_cmd {
-                        BACheckCommands::Linked => {
-                            check_links(&ba_config).await.unwrap();
-                        }
-                        BACheckCommands::Block{block_hash} => {
-                            check_block(&ba_config, block_hash).await.unwrap();
-                        }
-                        BACheckCommands::Blocks => {
-                            check_all_blocks(&ba_config, args.verbose).await.unwrap();
-                        }
+                BACommands::Check { check_cmd } => match check_cmd {
+                    BACheckCommands::Linked => {
+                        check_links(&ba_config).await.unwrap();
                     }
-                }
-                BACommands::Header{hex, block_hash} => {
+                    BACheckCommands::Block { block_hash } => {
+                        check_block(&ba_config, block_hash).await.unwrap();
+                    }
+                    BACheckCommands::Blocks => {
+                        check_all_blocks(&ba_config, args.verbose).await.unwrap();
+                    }
+                },
+                BACommands::Header { hex, block_hash } => {
                     header(&ba_config, block_hash, hex).await.unwrap();
                 }
-                BACommands::Import {import_cmd} => {
-                    match import_cmd {
-                        BAImportCommands::Rpc {rpc_uri} => {
-                            rpc_import(&ba_config, rpc_uri, args.verbose).await.unwrap();
-                        }
+                BACommands::Import { import_cmd } => match import_cmd {
+                    BAImportCommands::Rpc { rpc_uri } => {
+                        rpc_import(&ba_config, rpc_uri, args.verbose).await.unwrap();
                     }
-                }
+                },
                 BACommands::List => {
                     list_blocks(&ba_config).await.unwrap();
                 }
             }
-        },
-        CommandOrSystem::CS{ cs_cmd } => {
-            if ! config.chain_store.enabled {
+        }
+        CommandOrSystem::CS { cs_cmd } => {
+            if !config.chain_store.enabled {
                 println!("ChainStore is not enabled.")
             }
             let network = unsafe { foundationdb::boot() };
@@ -165,10 +165,10 @@ async fn main() {
             // todo: add a check to check that the total variables are correctly up to date, and the chainwork, and miners are correctly set
             // todo: add a check to check that the BlockValidity is correctly set
             match cs_cmd {
-                CSCommands::Block {block_hash} => {
+                CSCommands::Block { block_hash } => {
                     get_block_info(&config, block_hash).await;
-                },
-                CSCommands::List {block_id} => {
+                }
+                CSCommands::List { block_id } => {
                     cs_list_blocks(&config, block_id).await;
                 }
             }
