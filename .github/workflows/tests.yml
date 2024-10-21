@@ -1,6 +1,6 @@
 name: Rust Unit Tests
 
-on: [push, pull_request]
+on: [ push, pull_request ]
 
 permissions:
   checks: write
@@ -15,7 +15,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@nightly
 
       - name: Cache dependencies
         uses: Swatinem/rust-cache@v2
