@@ -55,27 +55,27 @@ impl BSVDBConfig {
     pub fn get_blockchain_id(&self) -> BlockchainId {
         // todo: this should be provided as a function by BlockchainId
         if self.blockchain == "mainnet" {
-            return BlockchainId::Main;
+            BlockchainId::Main
         } else if self.blockchain == "testnet" {
-            return BlockchainId::Test;
+            BlockchainId::Test
         } else if self.blockchain == "stn" {
-            return BlockchainId::Stn;
+            BlockchainId::Stn
         } else {
-            return BlockchainId::Regtest;
+            BlockchainId::Regtest
         }
     }
 
     /// Get the root path for the ChainStore, accounting for default based on BlockChain
     pub fn get_chain_store_root_path(&self) -> String {
-        if self.chain_store.root_path == "" {
-            return String::from(match self.get_blockchain_id() {
+        if self.chain_store.root_path.is_empty() {
+            String::from(match self.get_blockchain_id() {
                 BlockchainId::Main => "bsvmain",
                 BlockchainId::Test => "bsvtest",
                 BlockchainId::Stn => "bsvstn",
                 BlockchainId::Regtest => "bsvregtest",
-            });
+            })
         } else {
-            return self.chain_store.root_path.clone();
+            self.chain_store.root_path.clone()
         }
     }
 
@@ -96,7 +96,7 @@ impl BSVDBConfig {
     }
 }
 
-const DEFAULT_CONFIG: &'static str = r#"
+const DEFAULT_CONFIG: &str = r#"
 verbose = false
 blockchain = "mainnet"
 

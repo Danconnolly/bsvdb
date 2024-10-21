@@ -1,18 +1,17 @@
 // benchmarks on get_block_info
 
+use bitcoinsv::bitcoin::{BlockHash, BlockchainId};
+use bsvdb_base::ChainStoreConfig;
+use bsvdb_chainstore::{ChainStore, FDBChainStore};
+use criterion::{criterion_group, criterion_main, Criterion};
+use foundationdb::api::NetworkAutoStop;
+use hex::FromHex;
+use rand::random;
 use std::fs::File;
 use std::io;
 use std::io::{BufRead, BufReader};
-use bitcoinsv::bitcoin::{BlockchainId, BlockHash};
-use criterion::{Criterion, criterion_group, criterion_main};
-use foundationdb::api::NetworkAutoStop;
-use futures::executor::block_on;
-use hex::FromHex;
-use rand::random;
 use tokio::runtime::Runtime;
 use tokio::task::JoinHandle;
-use bsvdb_base::ChainStoreConfig;
-use bsvdb_chainstore::{ChainStore, FDBChainStore};
 
 // on main branch, 2024-07-22, 10_000 hashes
 //      get_block_info          time:   [6.1090 s 6.1658 s 6.2220 s]
@@ -20,7 +19,6 @@ use bsvdb_chainstore::{ChainStore, FDBChainStore};
 // on parallel branch, same date, parallel version
 //      get_block_info          time:   [149.52 ms 155.22 ms 161.60 ms]
 // = 64,000 checks/second
-
 
 // benchmark chainstore.get_block_info()
 // load a bunch of block hashes and do a lookup for each one
@@ -31,7 +29,9 @@ async fn setup_get_block_info() -> (FDBChainStore, JoinHandle<()>) {
         enabled: true,
         root_path: root,
     };
-    let mut chain_store = FDBChainStore::new(&config, BlockchainId::Mainnet).await.unwrap();
+    let mut chain_store = FDBChainStore::new(&config, BlockchainId::Main)
+        .await
+        .unwrap();
     chain_store
 }
 
@@ -61,7 +61,8 @@ async fn global_setup() -> (NetworkAutoStop, Vec<BlockHash>) {
     let mut strings: Vec<String> = reader
         .lines()
         .take(10_000)
-        .collect::<Result<Vec<String>, io::Error>>().expect("cant load lines");
+        .collect::<Result<Vec<String>, io::Error>>()
+        .expect("cant load lines");
     let mut hashes = vec![];
     for s in strings {
         hashes.push(BlockHash::from_hex(s).expect("cant convert to hash"));
@@ -80,15 +81,11 @@ fn benchmark(c: &mut Criterion) {
     let (network, block_hashes) = rt.block_on(global_setup());
     c.bench_function("parallel_get_block_info", |b| {
         let (mut chain_store, j) = rt.block_on(setup_get_block_info());
-        b.iter(|| {
-            rt.block_on(parallel_get_block_info(&mut chain_store, &block_hashes))
-        });
+        b.iter(|| rt.block_on(parallel_get_block_info(&mut chain_store, &block_hashes)));
     });
     c.bench_function("serial_get_block_info", |b| {
         let (mut chain_store, j) = rt.block_on(setup_get_block_info());
-        b.iter(|| {
-            rt.block_on(serial_get_block_info(&mut chain_store, &block_hashes))
-        });
+        b.iter(|| rt.block_on(serial_get_block_info(&mut chain_store, &block_hashes)));
     });
     rt.block_on(global_teardown(network));
 }
