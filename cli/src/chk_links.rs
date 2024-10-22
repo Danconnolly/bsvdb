@@ -4,6 +4,8 @@ use std::collections::BTreeSet;
 
 /// BlockArchive check links
 // todo: incorrectly reports genesis block as unlinked
+// todo: make this more extensive, report on length of max chain, number of linked blocks
+//      and for each unconnected sequence report the hashes
 pub async fn check_links(config: &BlockArchiveConfig) -> bsvdb_blockarchive::Result<()> {
     let mut archive = SimpleFileBasedBlockArchive::new(config).await.unwrap();
     let mut block_it = archive.block_list().await.unwrap();
