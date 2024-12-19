@@ -1,12 +1,11 @@
-use crate::chain_store::{BlockInfoStream, BlockInfoStreamFromChannel, ChainState};
+use crate::chain_store::{BlockInfoStreamFromChannel, ChainState};
 use crate::{BlockInfo, BlockValidity, ChainStore, Error, Result};
 use async_trait::async_trait;
-use bitcoinsv::bitcoin::{AsyncEncodable, BlockHash, BlockHeader, BlockchainId, Encodable};
+use bitcoinsv::bitcoin::{AsyncEncodable, BlockHash, BlockHeader, BlockchainId};
 use bsvdb_base::ChainStoreConfig;
 use foundationdb::directory::{Directory, DirectoryOutput};
 use foundationdb::tuple::{pack, unpack, Bytes, Element};
 use foundationdb::Transaction;
-use futures::Stream;
 use std::borrow::Cow;
 use std::future::Future;
 use std::pin::Pin;

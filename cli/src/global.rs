@@ -7,7 +7,6 @@ use bsvdb_chainstore::{BlockInfo, BlockValidity, ChainStore, FDBChainStore};
 use futures::StreamExt;
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
-use std::hash::Hash;
 use std::pin::Pin;
 use std::time::Instant;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
@@ -86,7 +85,7 @@ pub async fn sync_piped(config: &BSVDBConfig) -> CliResult<()> {
         sender: Sender<Stage2Result>,
     ) -> CliResult<()> {
         // unfortunately we cant send futures for retrieving block data at the moment, so we have to do it in the foreground here
-        let mut block_archive = SimpleFileBasedBlockArchive::new(&config.block_archive).await?;
+        let block_archive = SimpleFileBasedBlockArchive::new(&config.block_archive).await?;
         while let Some((j, block_hash)) = receiver.recv().await {
             let r = j.await.unwrap();
             if r.is_none() {
@@ -125,7 +124,7 @@ pub async fn sync_piped(config: &BSVDBConfig) -> CliResult<()> {
         config: BSVDBConfig,
         sender: Sender<Stage3Result>,
     ) -> CliResult<()> {
-        let mut block_archive = SimpleFileBasedBlockArchive::new(&config.block_archive).await?;
+        let block_archive = SimpleFileBasedBlockArchive::new(&config.block_archive).await?;
         while let Some(mut r) = receiver.recv().await {
             let sz = block_archive
                 .block_size(&r.hash)
@@ -217,7 +216,7 @@ pub async fn sync_piped(config: &BSVDBConfig) -> CliResult<()> {
 
     let (chain_store, _j_chain_store) =
         FDBChainStore::new(&config.chain_store, config.get_blockchain_id()).await?;
-    let (sender, mut receiver) = channel(BUFFER_SIZE);
+    let (sender, receiver) = channel(BUFFER_SIZE);
     let f_stage1 = stage1(block_hashes, chain_store.clone(), sender);
     let j_stage1 = tokio::spawn(f_stage1);
 
@@ -237,12 +236,12 @@ pub async fn sync_piped(config: &BSVDBConfig) -> CliResult<()> {
     let f_stage5 = stage5(r4);
     let j_stage5 = tokio::spawn(f_stage5);
 
-    j_stage1.await?;
-    j_stage2.await?;
-    j_stage3.await?;
-    j_stage4.await?;
+    let _ = j_stage1.await?;
+    let _ = j_stage2.await?;
+    let _ = j_stage3.await?;
+    let _ = j_stage4.await?;
 
-    let (mut block_infos, mut parent_children, mut known_parents) = j_stage5.await?.unwrap();
+    let (block_infos, mut parent_children, mut known_parents) = j_stage5.await?.unwrap();
     println!(
         "found {} new headers, with {} known parents",
         block_infos.len(),
