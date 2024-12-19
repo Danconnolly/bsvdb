@@ -64,6 +64,7 @@ impl FDBChainStore {
 impl ChainStore for FDBChainStore {
     type BlockId = u64;
 
+    #[allow(refining_impl_trait)]
     fn get_chain_state(
         &self,
     ) -> Pin<Box<dyn Future<Output = Result<ChainState<<Self as ChainStore>::BlockId>>> + Send>>
@@ -83,6 +84,7 @@ impl ChainStore for FDBChainStore {
         })
     }
 
+    #[allow(refining_impl_trait)]
     fn get_block_info(
         &self,
         db_id: Self::BlockId,
@@ -104,6 +106,7 @@ impl ChainStore for FDBChainStore {
         })
     }
 
+    #[allow(refining_impl_trait)]
     fn get_block_info_by_hash(
         &self,
         block_hash: BlockHash,
@@ -163,6 +166,7 @@ impl ChainStore for FDBChainStore {
     /// Implementation of [ChainStore::store_block_info()], see there for more information.
     ///
     /// Calls the actor function StoreBlockInfo().
+    #[allow(refining_impl_trait)]
     fn store_block_info(
         &self,
         block_info: BlockInfo<Self::BlockId>,
