@@ -5,7 +5,7 @@ edition = "2021"
 authors = [
     "Daniel Connolly <daniel@dconnolly.com>"
 ]
-license-file = "LICENSE"
+license-file = "../LICENSE"
 homepage = "https://github.com/Danconnolly/bsvdb/"
 repository = "https://github.com/Danconnolly/bsvdb/"
 description = "Base library for bsvdb"
