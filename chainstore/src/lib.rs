@@ -1,5 +1,3 @@
-#![feature(async_closure)]
-
 mod chain_store;
 mod fdb_chain_store;
 mod result;
