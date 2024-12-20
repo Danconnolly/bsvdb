@@ -539,10 +539,9 @@ impl FDBChainStoreActor {
         Ok(tokio::spawn(async move {
             let r = trx.get(k.as_slice(), false).await.unwrap();
             reply
-                .send(FDBChainStoreReply::BlockInfoReply(match r {
-                    Some(i) => Some(Self::decode_block_info(&i)),
-                    None => None,
-                }))
+                .send(FDBChainStoreReply::BlockInfoReply(
+                    r.map(|i| Self::decode_block_info(&i)),
+                ))
                 .expect("send of reply failed in get_block_info()");
         }))
     }
