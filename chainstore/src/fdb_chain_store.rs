@@ -494,7 +494,7 @@ impl FDBChainStoreActor {
         if v.is_none() {
             return Ok(None);
         }
-        let i = Self::decode_h_index(&v.unwrap().to_vec());
+        let i = Self::decode_h_index(&v.unwrap());
         Ok(Some(i))
     }
 
@@ -507,7 +507,7 @@ impl FDBChainStoreActor {
         let k = Self::get_next_id_key(chain_dir).unwrap();
         let _lck = next_id.lock().await;
         let v = trx.get(&k, false).await.unwrap().unwrap();
-        let id = Self::decode_next_id(&v.to_vec());
+        let id = Self::decode_next_id(&v);
         let v2 = Self::encode_next_id(id + 1);
         trx.set(&k, &v2);
         Ok(id)
@@ -526,7 +526,7 @@ impl FDBChainStoreActor {
                 .await
                 .unwrap()
                 .expect("chainstate missing from db"); // todo: remove
-            let r = Self::decode_chain_state(&v.to_vec());
+            let r = Self::decode_chain_state(&v);
             reply
                 .send(FDBChainStoreReply::ChainStateReply(r))
                 .expect("send of reply failed in get_chain_state()"); // todo: remove
@@ -544,7 +544,7 @@ impl FDBChainStoreActor {
             let r = trx.get(k.as_slice(), false).await.unwrap();
             reply
                 .send(FDBChainStoreReply::BlockInfoReply(match r {
-                    Some(i) => Some(Self::decode_block_info(&i.to_vec())),
+                    Some(i) => Some(Self::decode_block_info(&i)),
                     None => None,
                 }))
                 .expect("send of reply failed in get_block_info()");
@@ -566,7 +566,7 @@ impl FDBChainStoreActor {
                 let k = Self::get_block_info_key(infos_dir, id)?;
                 let r = trx.get(k.as_slice(), false).await.unwrap();
                 match r {
-                    Some(i) => Ok(Some(Self::decode_block_info(&i.to_vec()))),
+                    Some(i) => Ok(Some(Self::decode_block_info(&i))),
                     None => Ok(None),
                 }
             }
@@ -628,7 +628,7 @@ impl FDBChainStoreActor {
                         if r.is_none() {
                             break;
                         }
-                        let b_info = Self::decode_block_info(&r.unwrap().to_vec());
+                        let b_info = Self::decode_block_info(&r.unwrap());
                         id = b_info.prev_id;
                         let h = b_info.height;
                         tx.send(b_info).await.unwrap();
