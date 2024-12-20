@@ -44,11 +44,10 @@ jobs:
       - name: Run cargo audit
         run: cargo audit
 
-      # todo: temporarily disabled
-      #      - name: Run Clippy
-      #        uses: clechasseur/rs-clippy-check@v3
-      #        with:
-      #          args: --all-features
+      - name: Run Clippy
+        uses: clechasseur/rs-clippy-check@v3
+        with:
+          args: --all-features
 
       - name: Build
         run: cargo build --verbose
