@@ -76,7 +76,7 @@ pub async fn check_single_block(mut block: FullBlockStream) -> bsvdb_blockarchiv
         }
     }
     let m_root = hashes.pop_front().unwrap();
-    return Ok(m_root == block.block_header.merkle_root);
+    Ok(m_root == block.block_header.merkle_root)
 }
 
 // check the consistency of a single block
@@ -172,7 +172,7 @@ pub async fn rpc_import(
     let uri;
     let username;
     let password;
-    match Url::parse(&*rpc_uri) {
+    match Url::parse(&rpc_uri) {
         Err(_e) => {
             println!("could not parse RPC URI");
             return Ok(());
@@ -189,7 +189,7 @@ pub async fn rpc_import(
         }
     }
     let archive = SimpleFileBasedBlockArchive::new(config).await.unwrap();
-    let rpc_client = Client::new(&*uri, Auth::UserPass(username, password), None).unwrap();
+    let rpc_client = Client::new(&uri, Auth::UserPass(username, password), None).unwrap();
     let chain_tips = rpc_client.get_chain_tips().unwrap();
     let num_tips = chain_tips.len();
     let mut known_hashes = BTreeSet::new(); // set of hashes that are known and we either have it already or will get it
@@ -206,9 +206,9 @@ pub async fn rpc_import(
             let mut fetch_hashes = Vec::new(); // stack of hashes of blocks to get
             let mut hash = t.hash;
             while !known_hashes.contains(&hash) {
-                known_hashes.insert(hash.clone());
+                known_hashes.insert(hash);
                 if !archive.block_exists(&hash).await.unwrap() {
-                    fetch_hashes.push(hash.clone());
+                    fetch_hashes.push(hash);
                     let h = rpc_client.get_block_header(&hash).unwrap();
                     hash = h.prev_hash;
                 }

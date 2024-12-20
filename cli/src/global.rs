@@ -173,8 +173,8 @@ pub async fn sync_piped(config: &BSVDBConfig) -> CliResult<()> {
         let mut found = 0;
         while let Some((b_info, j)) = receiver.recv().await {
             let r = j.await.unwrap();
-            if r.is_some() {
-                known_parents.insert(r.unwrap().hash);
+            if let Some(h) = r {
+                known_parents.insert(h.hash);
             }
             match parents_children.get(&b_info.header.prev_hash) {
                 None => {
@@ -249,7 +249,7 @@ pub async fn sync_piped(config: &BSVDBConfig) -> CliResult<()> {
     );
 
     let mut added = 0;
-    while known_parents.len() > 0 {
+    while !known_parents.is_empty() {
         let p_hash = known_parents.pop_first().unwrap();
         if let Some(c_hashes) = parent_children.get(&p_hash) {
             for c_hash in c_hashes {

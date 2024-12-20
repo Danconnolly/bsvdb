@@ -245,11 +245,7 @@ impl FDBChainStoreActor {
         chain: BlockchainId,
         receiver: Receiver<(FDBChainStoreMessage, OneshotSender<FDBChainStoreReply>)>,
     ) -> Result<FDBChainStoreActor> {
-        let root_dir: Vec<String> = config
-            .root_path
-            .split('/')
-            .map(|i| String::from(i))
-            .collect();
+        let root_dir: Vec<String> = config.root_path.split('/').map(String::from).collect();
         let db = foundationdb::Database::default()?;
         let r_dir = foundationdb::directory::DirectoryLayer::default();
         // ensure chain dir exists and fetch it
@@ -288,7 +284,7 @@ impl FDBChainStoreActor {
     ) -> Result<()> {
         let trx = db.create_trx()?;
         let state_key = Self::get_state_key(chain_dir).unwrap();
-        let v = trx.get(&*state_key, false).await?;
+        let v = trx.get(&state_key, false).await?;
         if v.is_none() {
             // initialize database
             // set chain_state
@@ -298,19 +294,19 @@ impl FDBChainStoreActor {
                 dormant_tips: vec![],
                 invalid_tips: vec![],
             });
-            trx.set(&*state_key, &*v);
+            trx.set(&state_key, &v);
             // set next_id
             let v = Self::encode_next_id(1);
             let k = Self::get_next_id_key(chain_dir).unwrap();
-            trx.set(&*k, &*v);
+            trx.set(&k, &v);
             // store genesis BlockInfo
             let gbi = BlockInfo::genesis_info(chain);
             let k2 = Self::get_block_info_key(&info_dir, 0).unwrap();
             let v2 = Self::encode_block_info(&gbi);
-            trx.set(&*k2, &*v2);
+            trx.set(&k2, &v2);
             let k3 = Self::get_h_index_key(h_index_dir, &gbi.hash).unwrap();
             let v3 = Self::encode_h_index(0);
-            trx.set(&*k3, &*v3);
+            trx.set(&k3, &v3);
             trx.commit().await?;
         } else {
             trx.cancel();
@@ -325,7 +321,7 @@ impl FDBChainStoreActor {
 
     // decode ChainState from fdb format
     pub(crate) fn decode_chain_state(
-        v: &Vec<u8>,
+        v: &[u8],
     ) -> ChainState<<FDBChainStore as ChainStore>::BlockId> {
         let (most_work_tip, a, d, i) = unpack::<(u64, Element, Element, Element)>(v)
             .expect("unpack failed in decode_chain_state()");
@@ -373,9 +369,9 @@ impl FDBChainStoreActor {
     }
 
     // decode the next_id from fdb
-    pub(crate) fn decode_next_id(v: &Vec<u8>) -> <FDBChainStore as ChainStore>::BlockId {
+    pub(crate) fn decode_next_id(v: &[u8]) -> <FDBChainStore as ChainStore>::BlockId {
         let (i,) = unpack(v).expect("unpack failed in decode_next_id()");
-        return i;
+        i
     }
 
     // encode the next_id into fdb
@@ -392,9 +388,7 @@ impl FDBChainStoreActor {
     }
 
     // decode the BlockInfo from fdb
-    pub(crate) fn decode_block_info(
-        v: &Vec<u8>,
-    ) -> BlockInfo<<FDBChainStore as ChainStore>::BlockId> {
+    pub(crate) fn decode_block_info(v: &[u8]) -> BlockInfo<<FDBChainStore as ChainStore>::BlockId> {
         // the tuple is too large for the shortcut implementation
         let i = unpack::<Vec<Element>>(v).expect("unpack failed in decode_block_info()");
         let hash = BlockHash::from(i[1].as_bytes().unwrap().to_vec().as_slice());
@@ -405,7 +399,7 @@ impl FDBChainStoreActor {
             .map(|j| j.as_i64().unwrap() as u64)
             .collect();
         let chain_work = i[9].as_bytes().map(|j| j.to_vec());
-        let miner = i[12].as_str().map(|j| String::from(j));
+        let miner = i[12].as_str().map(String::from);
         BlockInfo {
             id: i[0].as_i64().unwrap() as u64,
             hash,
@@ -475,9 +469,9 @@ impl FDBChainStoreActor {
     }
 
     // decode the hash index value from fdb
-    pub(crate) fn decode_h_index(v: &Vec<u8>) -> <FDBChainStore as ChainStore>::BlockId {
+    pub(crate) fn decode_h_index(v: &[u8]) -> <FDBChainStore as ChainStore>::BlockId {
         let (i,) = unpack(v).expect("unpack failed in decode_h_index()");
-        return i;
+        i
     }
 
     // encode the hash index value into fdb
@@ -496,7 +490,7 @@ impl FDBChainStoreActor {
         if v.is_none() {
             return Ok(None);
         }
-        let i = Self::decode_h_index(&v.unwrap().to_vec());
+        let i = Self::decode_h_index(&v.unwrap());
         Ok(Some(i))
     }
 
@@ -508,10 +502,10 @@ impl FDBChainStoreActor {
         // only do one of these at a time to prevent db transaction clashes
         let k = Self::get_next_id_key(chain_dir).unwrap();
         let _lck = next_id.lock().await;
-        let v = trx.get(&*k, false).await.unwrap().unwrap();
-        let id = Self::decode_next_id(&v.to_vec());
+        let v = trx.get(&k, false).await.unwrap().unwrap();
+        let id = Self::decode_next_id(&v);
         let v2 = Self::encode_next_id(id + 1);
-        trx.set(&*k, &*v2);
+        trx.set(&k, &v2);
         Ok(id)
     }
 
@@ -528,7 +522,7 @@ impl FDBChainStoreActor {
                 .await
                 .unwrap()
                 .expect("chainstate missing from db"); // todo: remove
-            let r = Self::decode_chain_state(&v.to_vec());
+            let r = Self::decode_chain_state(&v);
             reply
                 .send(FDBChainStoreReply::ChainStateReply(r))
                 .expect("send of reply failed in get_chain_state()"); // todo: remove
@@ -545,10 +539,9 @@ impl FDBChainStoreActor {
         Ok(tokio::spawn(async move {
             let r = trx.get(k.as_slice(), false).await.unwrap();
             reply
-                .send(FDBChainStoreReply::BlockInfoReply(match r {
-                    Some(i) => Some(Self::decode_block_info(&i.to_vec())),
-                    None => None,
-                }))
+                .send(FDBChainStoreReply::BlockInfoReply(
+                    r.map(|i| Self::decode_block_info(&i)),
+                ))
                 .expect("send of reply failed in get_block_info()");
         }))
     }
@@ -568,7 +561,7 @@ impl FDBChainStoreActor {
                 let k = Self::get_block_info_key(infos_dir, id)?;
                 let r = trx.get(k.as_slice(), false).await.unwrap();
                 match r {
-                    Some(i) => Ok(Some(Self::decode_block_info(&i.to_vec()))),
+                    Some(i) => Ok(Some(Self::decode_block_info(&i))),
                     None => Ok(None),
                 }
             }
@@ -630,7 +623,7 @@ impl FDBChainStoreActor {
                         if r.is_none() {
                             break;
                         }
-                        let b_info = Self::decode_block_info(&r.unwrap().to_vec());
+                        let b_info = Self::decode_block_info(&r.unwrap());
                         id = b_info.prev_id;
                         let h = b_info.height;
                         tx.send(b_info).await.unwrap();
@@ -667,7 +660,7 @@ impl FDBChainStoreActor {
                         .expect("couldnt get next_id");         // todo: remove
                     let k = Self::get_h_index_key(&h_index_dir, &block_info.hash).unwrap();
                     let v = Self::encode_h_index(id);
-                    trx.set(&*k, &*v);
+                    trx.set(&k, &v);
                     block_info.id = id;
                 }
                 Some(id) => {
@@ -693,7 +686,7 @@ impl FDBChainStoreActor {
                 parent.next_ids.push(block_info.id);
                 let k = Self::get_block_info_key(&infos_dir, parent.id).unwrap();
                 let v = Self::encode_block_info(&parent);
-                trx.set(&*k, &*v);
+                trx.set(&k, &v);
             }
             // update total_size & total_tx if possible
             if parent.total_size.is_some() && block_info.size.is_some() {
@@ -722,7 +715,7 @@ impl FDBChainStoreActor {
             // save the block info
             let k = Self::get_block_info_key(&infos_dir, block_info.id).unwrap();
             let v = Self::encode_block_info(&block_info);
-            trx.set(&*k, &*v);
+            trx.set(&k, &v);
             trx.commit().await.expect("couldnt commit transaction"); // todo: remove
 
             // update the chain state if necessary - IAMHERE
@@ -735,7 +728,7 @@ impl FDBChainStoreActor {
     }
 
     /// main actor thread
-    async fn run(&mut self) -> () {
+    async fn run(&mut self) {
         let mut tasks = vec![];
         loop {
             tokio::select! {
