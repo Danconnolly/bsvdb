@@ -167,7 +167,7 @@ pub async fn header(
 pub async fn rpc_import(
     config: &BlockArchiveConfig,
     rpc_uri: String,
-    _all_tips: bool,
+    all_tips: bool,
     verbose: bool,
 ) -> bsvdb_blockarchive::Result<()> {
     let uri;
@@ -192,7 +192,7 @@ pub async fn rpc_import(
     let archive = SimpleFileBasedBlockArchive::new(config).await?;
     let rpc_client = Client::new(&uri, Auth::UserPass(username, password), None).unwrap();
     let mut tips = Vec::new();
-    {
+    if all_tips {
         let chain_tips = rpc_client.get_chain_tips().unwrap();
         for t in chain_tips {
             if t.status == GetChainTipsResultStatus::Active
@@ -207,6 +207,12 @@ pub async fn rpc_import(
                 }
             }
         }
+    } else {
+        let t = rpc_client.get_best_block_hash().unwrap();
+        if verbose {
+            println!("retrieved best block hash {}", t);
+        }
+        tips.push(t);
     }
     let num_tips = tips.len();
     let mut known_hashes = BTreeSet::new(); // set of hashes that are known and we either have it already or will get it
