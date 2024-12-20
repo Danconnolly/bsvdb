@@ -245,11 +245,7 @@ impl FDBChainStoreActor {
         chain: BlockchainId,
         receiver: Receiver<(FDBChainStoreMessage, OneshotSender<FDBChainStoreReply>)>,
     ) -> Result<FDBChainStoreActor> {
-        let root_dir: Vec<String> = config
-            .root_path
-            .split('/')
-            .map(|i| String::from(i))
-            .collect();
+        let root_dir: Vec<String> = config.root_path.split('/').map(String::from).collect();
         let db = foundationdb::Database::default()?;
         let r_dir = foundationdb::directory::DirectoryLayer::default();
         // ensure chain dir exists and fetch it
@@ -403,7 +399,7 @@ impl FDBChainStoreActor {
             .map(|j| j.as_i64().unwrap() as u64)
             .collect();
         let chain_work = i[9].as_bytes().map(|j| j.to_vec());
-        let miner = i[12].as_str().map(|j| String::from(j));
+        let miner = i[12].as_str().map(String::from);
         BlockInfo {
             id: i[0].as_i64().unwrap() as u64,
             hash,
