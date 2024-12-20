@@ -79,7 +79,7 @@ pub async fn check_single_block(mut block: FullBlockStream) -> bsvdb_blockarchiv
     Ok(m_root == block.block_header.merkle_root)
 }
 
-// check the consistency of a single block
+/// check the consistency of a single block
 pub async fn check_block(
     config: &BlockArchiveConfig,
     block_hash: BlockHash,
@@ -98,7 +98,7 @@ pub async fn check_block(
     Ok(())
 }
 
-// check all blocks
+/// check all blocks
 pub async fn check_all_blocks(
     config: &BlockArchiveConfig,
     verbose: bool,
@@ -160,13 +160,14 @@ pub async fn header(
     }
 }
 
-// connect to an SV node using RPC and import as many blocks as can be found
-// for every chain tip:
-//      follow chain down until find a block we already have, putting each block on a stack
-//      follow chain back up, popping off stack, fetch the block and store it in block archive
+/// connect to an SV node using RPC and import as many blocks as can be found
+/// for every chain tip:
+///      follow chain down until find a block we already have, putting each block on a stack
+///      follow chain back up, popping off stack, fetch the block and store it in block archive
 pub async fn rpc_import(
     config: &BlockArchiveConfig,
     rpc_uri: String,
+    all_tips: bool,
     verbose: bool,
 ) -> bsvdb_blockarchive::Result<()> {
     let uri;
@@ -188,52 +189,64 @@ pub async fn rpc_import(
             password = String::from(url.password().unwrap());
         }
     }
-    let archive = SimpleFileBasedBlockArchive::new(config).await.unwrap();
+    let archive = SimpleFileBasedBlockArchive::new(config).await?;
     let rpc_client = Client::new(&uri, Auth::UserPass(username, password), None).unwrap();
-    let chain_tips = rpc_client.get_chain_tips().unwrap();
-    let num_tips = chain_tips.len();
+    let mut tips = Vec::new();
+    if all_tips {
+        let chain_tips = rpc_client.get_chain_tips().unwrap();
+        for t in chain_tips {
+            if t.status == GetChainTipsResultStatus::Active
+                || t.status == GetChainTipsResultStatus::ValidFork
+                || t.status == GetChainTipsResultStatus::ValidHeaders
+            {
+                tips.push(t.hash);
+            } else {
+                // todo: this ignores the entire chain tip, there might be blocks down there that we should get
+                if verbose {
+                    println!("ignoring incomplete chain tip {}", t.hash);
+                }
+            }
+        }
+    } else {
+        let t = rpc_client.get_best_block_hash().unwrap();
+        if verbose {
+            println!("retrieved best block hash {}", t);
+        }
+        tips.push(t);
+    }
+    let num_tips = tips.len();
     let mut known_hashes = BTreeSet::new(); // set of hashes that are known and we either have it already or will get it
     let mut fetched = 0;
-    for t in chain_tips {
+    for t in tips {
         if verbose {
-            println!("checking chain tip {}", t.hash);
+            println!("checking chain tip {}", t);
         }
-        if t.status == GetChainTipsResultStatus::Active
-            || t.status == GetChainTipsResultStatus::ValidFork
-            || t.status == GetChainTipsResultStatus::ValidHeaders
-        {
-            // follow chain down
-            let mut fetch_hashes = Vec::new(); // stack of hashes of blocks to get
-            let mut hash = t.hash;
-            while !known_hashes.contains(&hash) {
-                known_hashes.insert(hash);
-                if !archive.block_exists(&hash).await.unwrap() {
-                    fetch_hashes.push(hash);
-                    let h = rpc_client.get_block_header(&hash).unwrap();
-                    hash = h.prev_hash;
-                }
+        // follow chain down
+        let mut fetch_hashes = Vec::new(); // stack of hashes of blocks to get
+        let mut hash = t;
+        while !known_hashes.contains(&hash) {
+            known_hashes.insert(hash);
+            if !archive.block_exists(&hash).await? {
+                fetch_hashes.push(hash);
+                let h = rpc_client.get_block_header(&hash).unwrap();
+                hash = h.prev_hash;
             }
+        }
+        if verbose {
+            println!(
+                "found known hash {}, need to fetch {} blocks",
+                hash,
+                fetch_hashes.len()
+            );
+        }
+        // fetch them
+        while let Some(h) = fetch_hashes.pop() {
+            let mut fb = rpc_client.get_block_binary(&h).await.unwrap();
+            archive.store_block(&h, &mut fb).await?;
             if verbose {
-                println!(
-                    "found known hash {}, need to fetch {} blocks",
-                    hash,
-                    fetch_hashes.len()
-                );
+                println!("stored block {}", h);
             }
-            // fetch them
-            while let Some(h) = fetch_hashes.pop() {
-                let mut fb = rpc_client.get_block_binary(&h).await.unwrap();
-                archive.store_block(&h, &mut fb).await.unwrap();
-                if verbose {
-                    println!("stored block {}", h);
-                }
-                fetched += 1
-            }
-        } else {
-            // todo: this ignores the entire chain tip, there might be blocks down there that we should get
-            if verbose {
-                println!("ignoring chain tip {}", t.hash);
-            }
+            fetched += 1
         }
     }
     println!(
