@@ -79,7 +79,7 @@ pub async fn check_single_block(mut block: FullBlockStream) -> bsvdb_blockarchiv
     Ok(m_root == block.block_header.merkle_root)
 }
 
-// check the consistency of a single block
+/// check the consistency of a single block
 pub async fn check_block(
     config: &BlockArchiveConfig,
     block_hash: BlockHash,
@@ -98,7 +98,7 @@ pub async fn check_block(
     Ok(())
 }
 
-// check all blocks
+/// check all blocks
 pub async fn check_all_blocks(
     config: &BlockArchiveConfig,
     verbose: bool,
@@ -160,13 +160,14 @@ pub async fn header(
     }
 }
 
-// connect to an SV node using RPC and import as many blocks as can be found
-// for every chain tip:
-//      follow chain down until find a block we already have, putting each block on a stack
-//      follow chain back up, popping off stack, fetch the block and store it in block archive
+/// connect to an SV node using RPC and import as many blocks as can be found
+/// for every chain tip:
+///      follow chain down until find a block we already have, putting each block on a stack
+///      follow chain back up, popping off stack, fetch the block and store it in block archive
 pub async fn rpc_import(
     config: &BlockArchiveConfig,
     rpc_uri: String,
+    all_tips: bool,
     verbose: bool,
 ) -> bsvdb_blockarchive::Result<()> {
     let uri;
@@ -188,7 +189,7 @@ pub async fn rpc_import(
             password = String::from(url.password().unwrap());
         }
     }
-    let archive = SimpleFileBasedBlockArchive::new(config).await.unwrap();
+    let archive = SimpleFileBasedBlockArchive::new(config).await?;
     let rpc_client = Client::new(&uri, Auth::UserPass(username, password), None).unwrap();
     let chain_tips = rpc_client.get_chain_tips().unwrap();
     let num_tips = chain_tips.len();
